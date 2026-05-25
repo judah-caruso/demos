@@ -747,13 +747,32 @@ function log(msg) {
   el.scrollTop = el.scrollHeight;
 }
 
-// PeerJS options — uses the default PeerJS Cloud broker. STUN servers help
-// peers discover their public IPs so direct WebRTC connections can form.
+// PeerJS options — uses the default PeerJS Cloud broker. STUN helps
+// peers discover their public IPs for a direct WebRTC connection; TURN
+// is the fallback relay for symmetric-NAT / restrictive-network pairs
+// where a direct path can't be negotiated. The Open Relay Project's
+// public credentials are baked in below — if connections start failing
+// across networks, those creds may have rotated and need refreshing.
 const PEER_OPTS = {
   config: {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun.cloudflare.com:3478" },
+      {
+        urls: "turn:openrelay.metered.ca:80",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443?transport=tcp",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
     ],
   },
 };
