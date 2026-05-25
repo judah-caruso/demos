@@ -22,15 +22,17 @@ function genNumberedHeartText(N) {
 }
 
 function genNumberedDiamondText(N) {
-  return `Draw ${N} cards. Keep 1. Send the rest to the bottom of your deck. Discard`;
+  return `Draw ${N} cards. Keep 1. Send the rest to the bottom of your deck.\nDiscard`;
 }
 
 function genNumberedSpadeText(N) {
-  return `Choose one:\n- Deal ${N} damage to a unit or player then discard\n- Play as an ${N} Might unit`;
+  const aOrAn = N == 8 ? "an" : "a";
+  return `Choose one:\n- Deal ${N} damage to a unit or player then discard\n- Play as ${aOrAn} ${N} Might unit`;
 }
 
 function genNumberedClubText(N) {
-  return `Choose one:\n- Play as an ${N} Might unit\n- Attach to another unit as a permanent +${N} Might buff (units can only have one attached buff; buffs are discarded when the unit dies)`;
+  const aOrAn = N == 8 ? "an" : "a";
+  return `Choose one:\n- Play as ${aOrAn} ${N} Might unit\n- Attach to another unit as a permanent +${N} Might buff (units can only have one attached buff; buffs are discarded when the unit dies)`;
 }
 
 const CARD_TOOLTIPS = {
@@ -664,6 +666,9 @@ function attachCardToCard(childId, parentId) {
   if (ci < 0) return;
   const parent = self.play.find((c) => c.id === parentId);
   if (!parent) return;
+  // Face-down cards can't participate in an attach (as child or parent).
+  // Flip face-up first.
+  if (parent.faceDown || self.play[ci].faceDown) return;
   const [child] = self.play.splice(ci, 1);
   // Forming a group resets face-down state for every card involved — the
   // parent, anything already attached to it, the child, and anything
@@ -1536,8 +1541,10 @@ function onCanvasMove(e) {
     card.y = Math.max(0, Math.min(maxYf, newY));
   }
   // Update the attach-preview target: another card whose center the
-  // dragged card currently overlaps. Skip while rotating (T held).
-  if (!tKeyDown) {
+  // dragged card currently overlaps. Skip while rotating (T held), and
+  // skip if the dragged card is face-down (face-down cards can't be
+  // attached as the child, just as they can't be the parent).
+  if (!tKeyDown && !card.faceDown) {
     const cx = card.x * w + CARD_W / 2;
     const cy = card.y * h + CARD_H / 2;
     const t = findOtherCardAt(cx, cy, drag.cardId);
@@ -1611,7 +1618,8 @@ function onCanvasUp(e) {
     // point against the other played cards.
     const dragged = self.play.find((c) => c.id === cardId);
     let target = null;
-    if (dragged) {
+    // Face-down cards can't attach to anything — flip face-up first.
+    if (dragged && !dragged.faceDown) {
       const { w, h } = boardSize(selfCanvas);
       const draggedCx = (dragged.x + CARD_W / w / 2) * w;
       const draggedCy = (dragged.y + CARD_H / h / 2) * h;
@@ -1637,6 +1645,10 @@ function findOtherCardAt(px, py, excludeId) {
   for (let i = self.play.length - 1; i >= 0; i--) {
     const c = self.play[i];
     if (c.id === excludeId) continue;
+    // Face-down cards can't be attached to — must be flipped face-up
+    // first. Skipping here also hides the green attach-preview outline
+    // on face-down cards during drag.
+    if (c.faceDown) continue;
     const cx = c.x * w + CARD_W / 2;
     const cy = c.y * h + CARD_H / 2;
     const rad = -((c.rot || 0) * Math.PI) / 180;
@@ -2327,11 +2339,16 @@ function openModal(title, cards, onPick, opts) {
       C: "Clubs",
       J: "Jokers",
     };
+    const isFaceOrAce = (r) => r === "A" || r === "J" || r === "Q" || r === "K";
     let currentSuit = null;
     let currentSection = null;
+    let seenNumberInSuit = false;
+    let dividerInsertedInSuit = false;
     for (const c of renderCards) {
       if (c.suit !== currentSuit) {
         currentSuit = c.suit;
+        seenNumberInSuit = false;
+        dividerInsertedInSuit = false;
         const group = document.createElement("div");
         group.className = "suit-group";
         const label = document.createElement("div");
@@ -2344,10 +2361,30 @@ function openModal(title, cards, onPick, opts) {
         label.appendChild(document.createTextNode(SUIT_NAMES[c.suit] || ""));
         group.appendChild(label);
         currentSection = document.createElement("div");
-        currentSection.className = "suit-cards";
+        // Standard suits use a fixed 14-column grid (one column per
+        // rank + a thin divider column) so face cards stay aligned
+        // across suits even when number cards are missing. Jokers
+        // keep the simple flex-wrap layout.
+        currentSection.className =
+          c.suit === "J" ? "suit-cards" : "suit-cards suit-grid";
         group.appendChild(currentSection);
         list.appendChild(group);
       }
+      // Drop a thin divider between the number cards (2–10) and the
+      // ace/face cards within a standard suit. Jokers have no numbers
+      // so they're naturally skipped.
+      if (
+        c.suit !== "J" &&
+        isFaceOrAce(c.rank) &&
+        seenNumberInSuit &&
+        !dividerInsertedInSuit
+      ) {
+        const divider = document.createElement("div");
+        divider.className = "rank-divider";
+        currentSection.appendChild(divider);
+        dividerInsertedInSuit = true;
+      }
+      if (!isFaceOrAce(c.rank)) seenNumberInSuit = true;
       const el = cardEl(c, { small: true });
       if (onPick) {
         el.classList.add("pickable");
@@ -2355,6 +2392,9 @@ function openModal(title, cards, onPick, opts) {
       } else {
         el.style.cursor = "default";
       }
+      // Pin each card to its rank's column inside .suit-grid so missing
+      // cards leave a gap, not a slide.
+      if (c.suit !== "J") el.style.gridColumn = String(RANK_COL[c.rank]);
       attachCardTooltip(el, c);
       currentSection.appendChild(el);
     }
@@ -2362,11 +2402,37 @@ function openModal(title, cards, onPick, opts) {
   document.getElementById("modal").classList.add("open");
 }
 
+// View-only ordering: hearts, diamonds, spades, clubs, jokers. Within a
+// suit, number cards 2–10 then ace, then jack, queen, king (ace sits
+// with the face cards rather than at rank-1). RANK_COL pins each rank
+// to a fixed column in the suit-grid layout so face cards stay aligned
+// across suits even when number cards are missing — the divider sits
+// at column 10.
+const VIEW_SUIT_ORDER = { H: 0, D: 1, S: 2, C: 3, J: 4 };
+const RANK_COL = {
+  "2": 1, "3": 2, "4": 3, "5": 4, "6": 5, "7": 6,
+  "8": 7, "9": 8, "10": 9, "A": 11, "J": 12, "Q": 13, "K": 14,
+};
+const VIEW_RANK_ORDER = [
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+  "A",
+  "J",
+  "Q",
+  "K",
+];
 function sortForView(a, b) {
-  const suitOrder = { S: 0, H: 1, D: 2, C: 3, J: 4 };
-  if (a.suit !== b.suit) return suitOrder[a.suit] - suitOrder[b.suit];
+  if (a.suit !== b.suit)
+    return VIEW_SUIT_ORDER[a.suit] - VIEW_SUIT_ORDER[b.suit];
   if (a.suit === "J") return a.rank === "BLACK" ? -1 : 1;
-  return RANKS.indexOf(a.rank) - RANKS.indexOf(b.rank);
+  return VIEW_RANK_ORDER.indexOf(a.rank) - VIEW_RANK_ORDER.indexOf(b.rank);
 }
 
 function closeModal() {

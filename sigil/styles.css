@@ -706,6 +706,38 @@ canvas.board {
     flex-wrap: wrap;
     gap: 6px;
 }
+/* Standard suits use a fixed 14-column grid (9 number columns + a thin
+   divider column + 4 ace/face columns) so face cards align across all
+   suits even when number cards are missing — the column width matches
+   .card.small so each card fills its slot. */
+.modal .deck-list .suit-grid {
+    display: grid;
+    grid-template-columns: repeat(9, 54px) auto repeat(4, 54px);
+    gap: 6px;
+    justify-content: start;
+    align-items: center;
+}
+/* Thin vertical line separating number cards (2–10) from ace/face cards
+   inside a suit row. Fades at both ends so it reads as a soft seam,
+   not a hard cut. */
+.modal .deck-list .rank-divider {
+    width: 1px;
+    height: 64px;
+    align-self: center;
+    background: linear-gradient(
+        to bottom,
+        transparent 0%,
+        var(--border) 30%,
+        var(--border) 70%,
+        transparent 100%
+    );
+    margin: 0 6px;
+    flex-shrink: 0;
+}
+.modal .deck-list .suit-grid .rank-divider {
+    grid-column: 10;
+    margin: 0;
+}
 .modal .deck-list .card.pickable {
     cursor: pointer;
     transition: transform 0.1s;
