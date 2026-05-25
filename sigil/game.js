@@ -748,34 +748,52 @@ function log(msg) {
 }
 
 // PeerJS options — uses the default PeerJS Cloud broker. STUN helps
-// peers discover their public IPs for a direct WebRTC connection; TURN
-// is the fallback relay for symmetric-NAT / restrictive-network pairs
-// where a direct path can't be negotiated. The Open Relay Project's
-// public credentials are baked in below — if connections start failing
-// across networks, those creds may have rotated and need refreshing.
-const PEER_OPTS = {
-  config: {
-    iceServers: [
+// peers discover their public IPs for a direct WebRTC connection; the
+// metered.ca TURN servers are the relay fallback for symmetric-NAT /
+// restrictive-network pairs. Credentials are fetched at runtime via
+// metered's REST API so they can be rotated without redeploying.
+const METERED_TURN_URL =
+  "https://sigil.metered.live/api/v1/turn/credentials?apiKey=6313bf0b660cefc023b6bed63cd777913157";
+const FALLBACK_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+];
+
+let iceServersPromise = null;
+async function fetchIceServers() {
+  try {
+    const r = await fetch(METERED_TURN_URL);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const metered = await r.json();
+    // Front-load Google + Cloudflare STUN so host/srflx candidates can
+    // gather quickly while the metered TURN servers stay available as
+    // the relay fallback.
+    return [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun.cloudflare.com:3478" },
-      {
-        urls: "turn:openrelay.metered.ca:80",
-        username: "openrelayproject",
-        credential: "openrelayproject",
-      },
-      {
-        urls: "turn:openrelay.metered.ca:443",
-        username: "openrelayproject",
-        credential: "openrelayproject",
-      },
-      {
-        urls: "turn:openrelay.metered.ca:443?transport=tcp",
-        username: "openrelayproject",
-        credential: "openrelayproject",
-      },
-    ],
-  },
-};
+      ...metered,
+    ];
+  } catch (e) {
+    console.warn(
+      "Failed to fetch metered TURN credentials; using STUN only:",
+      e,
+    );
+    return FALLBACK_ICE_SERVERS;
+  }
+}
+
+function getIceServers() {
+  if (!iceServersPromise) iceServersPromise = fetchIceServers();
+  return iceServersPromise;
+}
+
+async function buildPeerOpts() {
+  return { config: { iceServers: await getIceServers() } };
+}
+
+// Prefetch on script load so creds are warm by the time the user clicks
+// Host or Join.
+getIceServers();
 
 function hostLink(id) {
   const url = new URL(window.location.href);
@@ -800,10 +818,10 @@ function extractPeerId(input) {
   return s;
 }
 
-function host() {
+async function host() {
   if (peer) peer.destroy();
   setStatus("Creating room…");
-  peer = new Peer(PEER_OPTS);
+  peer = new Peer(await buildPeerOpts());
   peer.on("open", (id) => {
     const link = hostLink(id);
     setStatus("Share the link below to invite your opponent", "connected");
@@ -826,12 +844,12 @@ function host() {
   peer.on("error", (e) => logPeerError(e));
 }
 
-function join() {
+async function join() {
   const target = extractPeerId(document.getElementById("joinId").value);
   if (!target) return;
   if (peer) peer.destroy();
   setStatus("Connecting…");
-  peer = new Peer(PEER_OPTS);
+  peer = new Peer(await buildPeerOpts());
   peer.on("open", () => {
     log("Joining " + target);
     conn = peer.connect(target, { reliable: true });
