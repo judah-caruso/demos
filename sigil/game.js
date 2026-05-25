@@ -7,7 +7,245 @@ const CARD_W = 70;
 const CARD_H = 98;
 const CARD_RADIUS = 6;
 const DRAG_THRESHOLD_PX = 5;
+// Played (board) cards render scaled to free vertical room on the
+// table. The card grows back to full size when hovered or while being
+// dragged, so inspecting / picking up a card still feels generous.
+// Hit-testing uses the same scale (with hysteresis — hovered cards keep
+// their grown footprint until the cursor leaves it) so the visible
+// card and the click target stay in sync.
+const BOARD_CARD_SCALE = 1.0;
 const TOOLTIP_DELAY_MS = 250;
+
+// ============================================================
+// Accent palette
+// ----------
+// Each player is assigned one of four accent colors on page load. The
+// pick drives the player's UI accent (buttons, hover halos, focus
+// rings, etc.) AND the color of their card backs — so two players in
+// the same game can have visually distinct backs. The choice is sent
+// to the opponent over the data channel on connection (and on every
+// state broadcast as a defensive belt-and-suspenders), so each side
+// knows how to render the OTHER side's card backs.
+// ============================================================
+const ACCENT_PALETTES = {
+  red: {
+    accent: "#c44545",
+    accentRgb: "196, 69, 69",
+    accent2: "#a83838",
+    accentText: "#f5f5f5",
+    cardBack: "#c44545",
+    cardBack2: "#d65a5a",
+    cardBackBorder: "#8a2828",
+    cardBackMark: "rgba(240, 240, 240, 0.92)",
+    cardBackPattern: "rgba(255, 255, 255, 0.06)",
+  },
+  blue: {
+    accent: "#4080d0",
+    accentRgb: "64, 128, 208",
+    accent2: "#2f68b0",
+    accentText: "#f5f5f5",
+    cardBack: "#4080d0",
+    cardBack2: "#5a96e0",
+    cardBackBorder: "#285590",
+    cardBackMark: "rgba(220, 220, 220, 0.92)",
+    cardBackPattern: "rgba(255, 255, 255, 0.06)",
+  },
+  green: {
+    accent: "#4caf6e",
+    accentRgb: "76, 175, 110",
+    accent2: "#3d9258",
+    accentText: "#f5f5f5",
+    cardBack: "#4caf6e",
+    cardBack2: "#62c585",
+    cardBackBorder: "#2f7d4c",
+    cardBackMark: "rgba(220, 220, 220, 0.92)",
+    cardBackPattern: "rgba(255, 255, 255, 0.06)",
+  },
+  white: {
+    accent: "#d4d4d4",
+    accentRgb: "212, 212, 212",
+    accent2: "#b0b0b0",
+    accentText: "#141414",
+    cardBack: "#d4d4d4",
+    cardBack2: "#e8e8e8",
+    cardBackBorder: "#888888",
+    cardBackMark: "rgba(40, 40, 40, 0.85)",
+    cardBackPattern: "rgba(0, 0, 0, 0.06)",
+  },
+  black: {
+    // Near-black accent — both shades are LIGHTER than the page bg
+    // (#141414) so the button stays visible at rest and gains contrast
+    // on hover instead of vanishing. Other palettes darken on hover
+    // because their accent has headroom to spare; black doesn't.
+    accent: "#333333",
+    accentRgb: "51, 51, 51",
+    accent2: "#4a4a4a",
+    accentText: "#f5f5f5",
+    cardBack: "#1f1f1f",
+    cardBack2: "#2a2a2a",
+    cardBackBorder: "#0a0a0a",
+    cardBackMark: "rgba(220, 220, 220, 0.92)",
+    cardBackPattern: "rgba(255, 255, 255, 0.05)",
+  },
+  pink: {
+    accent: "#d96b9b",
+    accentRgb: "217, 107, 155",
+    accent2: "#b85580",
+    accentText: "#141414",
+    cardBack: "#d96b9b",
+    cardBack2: "#e885ae",
+    cardBackBorder: "#9c456e",
+    cardBackMark: "rgba(40, 40, 40, 0.85)",
+    cardBackPattern: "rgba(0, 0, 0, 0.07)",
+  },
+  purple: {
+    // Reference palette: #7F49B4 over #141414 with #CFCFCF marks.
+    accent: "#7f49b4",
+    accentRgb: "127, 73, 180",
+    accent2: "#6a3d9a",
+    accentText: "#f5f5f5",
+    cardBack: "#7f49b4",
+    cardBack2: "#9a63d0",
+    cardBackBorder: "#5a3382",
+    cardBackMark: "rgba(207, 207, 207, 0.92)",
+    cardBackPattern: "rgba(255, 255, 255, 0.07)",
+  },
+  yellow: {
+    accent: "#d4a432",
+    accentRgb: "212, 164, 50",
+    accent2: "#b08826",
+    accentText: "#141414",
+    cardBack: "#d4a432",
+    cardBack2: "#e6ba4a",
+    cardBackBorder: "#9a7822",
+    cardBackMark: "rgba(40, 40, 40, 0.85)",
+    cardBackPattern: "rgba(0, 0, 0, 0.07)",
+  },
+  orange: {
+    accent: "#d77a3d",
+    accentRgb: "215, 122, 61",
+    accent2: "#b5642a",
+    accentText: "#141414",
+    cardBack: "#d77a3d",
+    cardBack2: "#e89154",
+    cardBackBorder: "#9a5226",
+    cardBackMark: "rgba(40, 40, 40, 0.85)",
+    cardBackPattern: "rgba(0, 0, 0, 0.07)",
+  },
+};
+const PALETTE_NAMES = Object.keys(ACCENT_PALETTES);
+
+// ============================================================
+// Local persistence
+// ----------
+// Cards, hand, deck, discard, counters, and the picked accent all
+// persist in localStorage so refreshing the page (or losing the
+// connection and rejoining via the same share link) restores the
+// player's board instead of wiping it. The host's PeerJS id changes
+// on refresh, so this is most useful for a joiner reconnecting to a
+// still-up host; but it also lets a solo host restore their setup if
+// they reload.
+// ============================================================
+const STORAGE_KEY = "sigil-game-state-v1";
+const STATE_VERSION = 1;
+function loadSavedState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || obj.version !== STATE_VERSION) return null;
+    return obj;
+  } catch (e) {
+    return null;
+  }
+}
+function saveLocalState() {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: STATE_VERSION,
+        deck: self.deck,
+        hand: self.hand,
+        play: self.play,
+        discard: self.discard,
+        set: self.set,
+        counters: self.counters,
+        palette: selfPaletteName,
+        format: typeof currentFormat === "string" ? currentFormat : "full",
+        fastDeckText:
+          typeof lastFastDeckText === "string" ? lastFastDeckText : "",
+      }),
+    );
+  } catch (e) {
+    // Quota / private-browsing / serialization failure — best-effort only.
+  }
+}
+const _savedForBoot = loadSavedState();
+let selfPaletteName =
+  _savedForBoot && ACCENT_PALETTES[_savedForBoot.palette]
+    ? _savedForBoot.palette
+    : PALETTE_NAMES[Math.floor(Math.random() * PALETTE_NAMES.length)];
+// Default to blue so opp card backs aren't blank before the opp's
+// "hello" arrives; overridden as soon as the connection opens.
+let oppPaletteName = "blue";
+function getPalette(name) {
+  return ACCENT_PALETTES[name] || ACCENT_PALETTES.blue;
+}
+// Currently rendering side's palette — set at the top of each
+// drawBoard() so card-back, hover halo, and ping draws don't need to
+// thread the palette through every call site.
+let currentRenderPalette = getPalette(selfPaletteName);
+function applySelfPalette() {
+  const p = getPalette(selfPaletteName);
+  const root = document.documentElement.style;
+  root.setProperty("--accent", p.accent);
+  root.setProperty("--accent2", p.accent2);
+  root.setProperty("--accent-glow", `rgba(${p.accentRgb}, 0.78)`);
+  root.setProperty("--accent-tint", `rgba(${p.accentRgb}, 0.16)`);
+  root.setProperty("--accent-text", p.accentText);
+  root.setProperty("--card-back", p.cardBack);
+  root.setProperty("--card-back2", p.cardBack2);
+  root.setProperty("--card-back-border", p.cardBackBorder);
+  root.setProperty("--card-back-mark", p.cardBackMark);
+  root.setProperty("--card-back-pattern", p.cardBackPattern);
+}
+function applyOppPalette() {
+  const p = getPalette(oppPaletteName);
+  // Scope opp's card-back vars to .half.opp so the opp's deck/discard
+  // DOM piles render in opp's color. The page-wide --accent stays as
+  // self's color (it's the *local player's* identity).
+  const oppHalf = document.querySelector(".half.opp");
+  if (!oppHalf) return;
+  oppHalf.style.setProperty("--card-back", p.cardBack);
+  oppHalf.style.setProperty("--card-back2", p.cardBack2);
+  oppHalf.style.setProperty("--card-back-border", p.cardBackBorder);
+  oppHalf.style.setProperty("--card-back-mark", p.cardBackMark);
+  oppHalf.style.setProperty("--card-back-pattern", p.cardBackPattern);
+}
+applySelfPalette();
+// applyOppPalette() runs after the DOM is ready (the .half.opp
+// element doesn't exist at script-eval time when this module is
+// loaded with `defer` ... but the rest of game.js depends on those
+// elements too, so by the time we reach the wireConn handlers below
+// the DOM is ready). Defer to the next tick to be safe.
+queueMicrotask(applyOppPalette);
+
+// User-invoked: set a specific accent color, apply locally, tell the
+// opp, and persist. Used by the deck right-click "Change color"
+// submenu where each color is an explicit pick.
+function setSelfPalette(name) {
+  if (!ACCENT_PALETTES[name]) return;
+  selfPaletteName = name;
+  applySelfPalette();
+  if (typeof drawSelf === "function") drawSelf();
+  if (typeof renderSelf === "function") renderSelf();
+  if (conn && conn.open) {
+    conn.send({ type: "hello", palette: selfPaletteName });
+  }
+  saveLocalState();
+  log("Accent color → " + selfPaletteName);
+}
 
 // ============================================================
 // Per-card tooltips
@@ -141,6 +379,238 @@ function freshDeck() {
   return cards;
 }
 
+// ============================================================
+// Formats
+// ----------
+// Full = standard 54-card deck, counter defaults to 30.
+// Fast = 25-card deck (picked from premades or pasted as text),
+//        counter defaults to 20.
+// The chosen format is per-player (decks are private) and persists
+// in localStorage so refresh keeps the same format. The format
+// dropdown lives in the header.
+// ============================================================
+const FORMATS = {
+  full: { deckSize: 54, counterDefault: 30 },
+  fast: { deckSize: 25, counterDefault: 20 },
+};
+const FAST_DECK_SIZE = 25;
+
+// Parse a single card code into a {suit, rank} pair, or null if
+// invalid. Accepts: rank+suit codes ("AS", "10H", "TS"); jokers as
+// "RJ"/"JR"/"RED JOKER" or "BJ"/"JB"/"BLACK JOKER". Case-insensitive.
+function parseCardCode(code) {
+  const raw = (code || "").trim().toUpperCase();
+  if (!raw || raw.startsWith("#")) return null;
+  if (raw === "RJ" || raw === "JR" || raw === "RED JOKER")
+    return { suit: "J", rank: "RED" };
+  if (raw === "BJ" || raw === "JB" || raw === "BLACK JOKER")
+    return { suit: "J", rank: "BLACK" };
+  // Suit is the last char; rank is everything before. "T" → "10".
+  const suit = raw.slice(-1);
+  let rank = raw.slice(0, -1);
+  if (rank === "T") rank = "10";
+  if (!"SHDC".includes(suit)) return null;
+  if (!RANKS.includes(rank)) return null;
+  return { suit, rank };
+}
+
+// Parse multi-line / space-separated card list. Whitespace, blank
+// lines, and `# comments` are ignored. Returns the deduplicated card
+// list plus an `errors` array — each entry carries the offending
+// token / canonical code, the line number it appeared on, and whether
+// it's an unknown card or a duplicate — so the UI can call out
+// exactly what and where the issue is.
+function parseDeckText(text) {
+  const cards = [];
+  const seen = new Set();
+  const errors = [];
+  const lines = (text || "").split("\n");
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li].split("#")[0]; // strip trailing comment
+    for (const tok of line.split(/[\s,]+/)) {
+      if (!tok) continue;
+      const c = parseCardCode(tok);
+      if (!c) {
+        errors.push({ type: "unknown", token: tok, line: li + 1 });
+        continue;
+      }
+      const key = c.suit + ":" + c.rank;
+      if (seen.has(key)) {
+        errors.push({
+          type: "duplicate",
+          code: cardSpecToCode(c),
+          line: li + 1,
+        });
+        continue;
+      }
+      seen.add(key);
+      cards.push(c);
+    }
+  }
+  return { cards, errors };
+}
+
+// Inverse of parseCardCode — render a {suit, rank} pair back to its
+// short code so we can populate the textarea with the previously-
+// applied deck. Used for premade decks (joined as newlines) and for
+// re-serializing whatever the user last applied.
+function cardSpecToCode(c) {
+  if (c.suit === "J") return c.rank === "RED" ? "RJ" : "BJ";
+  return c.rank + c.suit;
+}
+
+// Canonical 54-card index used by the deck encoder/decoder. Stable
+// order: H, D, S, C (ranks A,2..10,J,Q,K), then red joker, then
+// black joker. The encoding is a 54-bit bitmask packed into 7 bytes
+// and base64-encoded — small enough to paste in chat (~10 chars) and
+// trivially decoded back to a {suit, rank} list.
+const FAST_DECK_CARD_LIST = (() => {
+  const out = [];
+  for (const suit of ["H", "D", "S", "C"]) {
+    for (const rank of RANKS) out.push({ suit, rank });
+  }
+  out.push({ suit: "J", rank: "RED" });
+  out.push({ suit: "J", rank: "BLACK" });
+  return out;
+})();
+const FAST_DECK_CARD_INDEX = (() => {
+  const m = {};
+  FAST_DECK_CARD_LIST.forEach((c, i) => {
+    m[c.suit + ":" + c.rank] = i;
+  });
+  return m;
+})();
+const FAST_DECK_BYTES = Math.ceil(FAST_DECK_CARD_LIST.length / 8);
+
+// Encode a list of {suit, rank} specs into a base64url string with
+// no padding. Order doesn't matter; duplicates are folded into the
+// bitmask. Empty input produces an all-zero code.
+function encodeFastDeck(specs) {
+  const bytes = new Uint8Array(FAST_DECK_BYTES);
+  for (const s of specs) {
+    const idx = FAST_DECK_CARD_INDEX[s.suit + ":" + s.rank];
+    if (idx == null) continue;
+    bytes[Math.floor(idx / 8)] |= 1 << (idx % 8);
+  }
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Decode a base64url code back to a list of specs. Returns null on
+// any failure (bad characters, wrong byte length, etc.) so callers
+// can show an error.
+function decodeFastDeck(code) {
+  try {
+    let s = String(code || "")
+      .trim()
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    if (!s) return null;
+    while (s.length % 4) s += "=";
+    const bin = atob(s);
+    if (bin.length !== FAST_DECK_BYTES) return null;
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const specs = [];
+    for (let i = 0; i < FAST_DECK_CARD_LIST.length; i++) {
+      if (bytes[Math.floor(i / 8)] & (1 << (i % 8))) {
+        specs.push(FAST_DECK_CARD_LIST[i]);
+      }
+    }
+    return specs;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Premade Fast-format decks. Each entry can be ONE of three shapes:
+//   1. A deck-code string from the Export button:
+//        "Best deck": "AQwArNr_Pg"
+//   2. An array of short card codes (see parseCardCode):
+//        "Face Heavy": ["JS", "QS", ...]
+//   3. An array of { suit, rank } objects (e.g. the value returned by
+//      decodeFastDeck — though shape #1 is shorter to author):
+//        "Custom": decodeFastDeck("AQwArNr_Pg")
+// resolvePremadeDeck() normalizes any of these to a spec list.
+function resolvePremadeDeck(entry) {
+  if (!entry) return [];
+  if (typeof entry === "string") return decodeFastDeck(entry) || [];
+  if (Array.isArray(entry)) {
+    return entry
+      .map((e) =>
+        typeof e === "string"
+          ? parseCardCode(e)
+          : e && e.suit && e.rank
+            ? e
+            : null,
+      )
+      .filter(Boolean);
+  }
+  return [];
+}
+
+const PREMADE_FAST_DECKS = {
+  "Black Aggro": "AQwArNr_Pg",
+  "Red Control": "_zwA_3AAMA",
+};
+
+let currentFormat =
+  _savedForBoot && FORMATS[_savedForBoot.format]
+    ? _savedForBoot.format
+    : "full";
+
+// Last-applied Fast deck text — populates the textarea when the
+// modal reopens so the player can edit their previous deck instead
+// of pasting it again. Saved/restored via localStorage.
+let lastFastDeckText =
+  _savedForBoot && typeof _savedForBoot.fastDeckText === "string"
+    ? _savedForBoot.fastDeckText
+    : "";
+
+// Replace self.* with a freshly-shuffled deck of the given cards
+// (which are {suit, rank} pairs from parseCardCode / premades), and
+// set the deck counter to the Fast default. `sourceText` is what
+// gets stashed as `lastFastDeckText` so the modal can re-render the
+// deck as text on reopen — pass the user's raw paste for custom
+// decks, or the premade's code list joined by newlines.
+function applyFastDeck(cardSpecs, label, sourceText) {
+  const deck = cardSpecs.map((c) => ({
+    id: nextCardId(),
+    suit: c.suit,
+    rank: c.rank,
+  }));
+  shuffleInPlace(deck);
+  self.deck = deck;
+  self.hand = [];
+  self.discard = [];
+  self.set = [];
+  self.play = [];
+  self.counters = { deck: FORMATS.fast.counterDefault };
+  currentFormat = "fast";
+  lastFastDeckText =
+    sourceText != null ? sourceText : cardSpecs.map(cardSpecToCode).join("\n");
+  log("Format: Fast — " + (label || `${deck.length} cards`));
+  notifyOpp("started a new game (Fast format)");
+  renderSelf();
+  broadcastState();
+}
+
+function selectFullFormat() {
+  self.deck = freshDeck();
+  shuffleInPlace(self.deck);
+  self.hand = [];
+  self.discard = [];
+  self.set = [];
+  self.play = [];
+  self.counters = { deck: FORMATS.full.counterDefault };
+  currentFormat = "full";
+  log("Format: Full — 54 cards");
+  notifyOpp("started a new game (Full format)");
+  renderSelf();
+  broadcastState();
+}
+
 function shuffleInPlace(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -166,6 +636,8 @@ const self = {
   deck: [],
   hand: [],
   discard: [],
+  set: [], // "set aside" pile — cards picked from the deck via the
+  // side section above the deck counter. Visible to both players.
   play: [],
   counters: { deck: 30 },
 };
@@ -173,6 +645,7 @@ const opp = {
   deckCount: 0,
   handCount: 0,
   discard: [],
+  set: [],
   play: [],
   counters: { deck: 30 },
 };
@@ -181,6 +654,20 @@ let peer = null;
 let conn = null;
 let drag = null;
 let suppressNextClick = false;
+let suppressNextClickTimer = null;
+// Set `suppressNextClick` after a drag-drop so the synthetic click the
+// browser fires from the same pointerup doesn't trigger pile/canvas
+// click handlers. The flag auto-clears after a short window so a later
+// real click on a pile isn't accidentally eaten when no synthetic
+// click ever fired (e.g., drop landed somewhere non-clickable).
+function armClickSuppression() {
+  suppressNextClick = true;
+  if (suppressNextClickTimer != null) clearTimeout(suppressNextClickTimer);
+  suppressNextClickTimer = setTimeout(() => {
+    suppressNextClick = false;
+    suppressNextClickTimer = null;
+  }, 200);
+}
 let tKeyDown = false;
 let cKeyDown = false;
 let pKeyDown = false;
@@ -264,15 +751,21 @@ function drawCard(ctx, card, x, y, opts) {
   opts = opts || {};
   const rot = (card.rot || 0) + (opts.lifted ? 2 : 0);
   const hovered = !!opts.hovered && !opts.lifted;
+  // Hovered or being-dragged cards render at full size; otherwise the
+  // played card uses BOARD_CARD_SCALE so the board fits more rows.
+  const scale = hovered || opts.lifted ? 1 : BOARD_CARD_SCALE;
   ctx.save();
-  // Rotate around the card's center.
+  // Rotate (and scale) around the card's center, so the card grows
+  // symmetrically on hover instead of expanding from one corner.
   ctx.translate(x + CARD_W / 2, y + CARD_H / 2);
   if (rot) ctx.rotate((rot * Math.PI) / 180);
+  if (scale !== 1) ctx.scale(scale, scale);
   ctx.translate(-CARD_W / 2, -CARD_H / 2);
-  // Shadow: amber glow on hover, deeper drop shadow when being dragged,
-  // otherwise a subtle drop shadow.
+  // Shadow: accent-tinted glow on hover, deeper drop shadow when being
+  // dragged, otherwise a subtle drop shadow.
+  const haloRgb = currentRenderPalette.accentRgb;
   if (hovered) {
-    ctx.shadowColor = "rgba(74, 127, 180, 0.85)";
+    ctx.shadowColor = `rgba(${haloRgb}, 0.85)`;
     ctx.shadowBlur = 14;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
@@ -289,10 +782,10 @@ function drawCard(ctx, card, x, y, opts) {
     roundRectPath(ctx, 0, 0, CARD_W, CARD_H, CARD_RADIUS);
     ctx.fill();
     ctx.shadowColor = "transparent";
-    ctx.strokeStyle = hovered ? "rgba(74, 127, 180, 0.95)" : "rgba(0,0,0,0.25)";
+    ctx.strokeStyle = hovered ? `rgba(${haloRgb}, 0.95)` : "rgba(0,0,0,0.25)";
     ctx.lineWidth = hovered ? 1.5 : 1;
     ctx.stroke();
-    ctx.fillStyle = isRed(card) ? "#b85c5c" : "#141414";
+    ctx.fillStyle = isRed(card) ? "#c44545" : "#1f1f1f";
     if (card.suit === "J") drawJokerContent(ctx, card, 0, 0);
     else drawStandardContent(ctx, card, 0, 0);
   }
@@ -314,12 +807,15 @@ function drawCard(ctx, card, x, y, opts) {
 }
 
 // Draws a soft green halo + outline matching the card's rotation, used to
-// preview which card you'd attach to mid-drag.
-function drawAttachPreview(ctx, card, x, y) {
+// preview which card you'd attach to mid-drag. The scale matches the
+// target card's render scale so the outline tracks the visible footprint.
+function drawAttachPreview(ctx, card, x, y, scale) {
+  scale = scale || 1;
   ctx.save();
   ctx.translate(x + CARD_W / 2, y + CARD_H / 2);
   const rot = card.rot || 0;
   if (rot) ctx.rotate((rot * Math.PI) / 180);
+  if (scale !== 1) ctx.scale(scale, scale);
   ctx.translate(-CARD_W / 2, -CARD_H / 2);
   ctx.shadowColor = "rgba(136, 192, 152, 0.7)";
   ctx.shadowBlur = 14;
@@ -343,11 +839,21 @@ function drawCardCounter(ctx, value) {
   ctx.shadowColor = "rgba(0,0,0,0.4)";
   ctx.shadowBlur = 3;
   ctx.shadowOffsetY = 1;
-  ctx.fillStyle = value > 0 ? "#4a7fb4" : "#b85c5c";
+  // Positive uses a palette-independent near-opaque dark fill so the
+  // chip is clearly visible against any card back — including
+  // face-down cards whose back shares the same accent color. Negative
+  // keeps the red fill as a semantic damage cue.
+  const positive = value > 0;
+  ctx.fillStyle = positive ? "rgba(20, 20, 20, 0.92)" : "#c44545";
   roundRectPath(ctx, bx, by, bw, bh, 9);
   ctx.fill();
   ctx.shadowColor = "transparent";
-  ctx.fillStyle = "#cfcfcf";
+  // Hairline outline defines the chip's edge on dark card backs where
+  // the dark fill would otherwise blend in.
+  ctx.strokeStyle = positive ? "rgba(255, 255, 255, 0.4)" : "#ffffff";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, bx + bw / 2, by + bh / 2 + 1);
@@ -409,7 +915,7 @@ function drawCounterWidget(ctx, card) {
   roundRectPath(ctx, r.left, r.top, r.w, r.h, 12);
   ctx.fill();
   ctx.shadowColor = "transparent";
-  ctx.strokeStyle = "rgba(74, 127, 180, 0.7)";
+  ctx.strokeStyle = `rgba(${getPalette(selfPaletteName).accentRgb}, 0.7)`;
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.font = "bold 16px -apple-system, sans-serif";
@@ -437,10 +943,26 @@ function drawCounterWidget(ctx, card) {
 }
 
 function drawCardBack(ctx, x, y, hovered) {
-  ctx.fillStyle = "#4a7fb4";
+  const p = currentRenderPalette;
+  ctx.fillStyle = p.cardBack;
   roundRectPath(ctx, x, y, CARD_W, CARD_H, CARD_RADIUS);
   ctx.fill();
   ctx.shadowColor = "transparent";
+  // Subtle diagonal stripe pattern, clipped to the rounded card shape.
+  // Matches the CSS repeating-linear-gradient on .card.face-down so the
+  // DOM and canvas card backs share one texture.
+  ctx.save();
+  roundRectPath(ctx, x, y, CARD_W, CARD_H, CARD_RADIUS);
+  ctx.clip();
+  ctx.strokeStyle = p.cardBackPattern;
+  ctx.lineWidth = 1;
+  for (let i = -CARD_H; i < CARD_W + CARD_H; i += 7) {
+    ctx.beginPath();
+    ctx.moveTo(x + i, y);
+    ctx.lineTo(x + i + CARD_H, y + CARD_H);
+    ctx.stroke();
+  }
+  ctx.restore();
   // 4-point sparkle sigil — matches the CSS pseudo-element on
   // .card.face-down so deck/discard piles and played face-down cards
   // share one design.
@@ -449,7 +971,7 @@ function drawCardBack(ctx, x, y, hovered) {
   const R = 15;
   const r = R * 0.32;
   const s = r * Math.SQRT1_2;
-  ctx.fillStyle = "rgba(207, 207, 207, 0.92)";
+  ctx.fillStyle = p.cardBackMark;
   ctx.beginPath();
   ctx.moveTo(mcx, mcy - R);
   ctx.lineTo(mcx + s, mcy - s);
@@ -461,7 +983,7 @@ function drawCardBack(ctx, x, y, hovered) {
   ctx.lineTo(mcx - s, mcy - s);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = hovered ? "rgba(207, 207, 207, 0.95)" : "#345d85";
+  ctx.strokeStyle = hovered ? `rgba(${p.accentRgb}, 0.95)` : p.cardBackBorder;
   ctx.lineWidth = hovered ? 1.5 : 1;
   roundRectPath(ctx, x, y, CARD_W, CARD_H, CARD_RADIUS);
   ctx.stroke();
@@ -509,6 +1031,11 @@ function drawJokerContent(ctx, card, x, y) {
 function drawBoard(canvas, ctx, cards, hoverId) {
   const { w, h } = boardSize(canvas);
   const mirrored = canvas === oppCanvas;
+  // Tell the per-card render functions which palette to use — opp
+  // cards render with the opp's chosen accent, self with our own.
+  currentRenderPalette = getPalette(
+    mirrored ? oppPaletteName : selfPaletteName,
+  );
   ctx.clearRect(0, 0, w, h);
   // Draw in order; the currently directly-dragged card is drawn last
   // (so it floats above the others) with a lifted effect. Use _renderX/Y
@@ -518,21 +1045,52 @@ function drawBoard(canvas, ctx, cards, hoverId) {
   // Helper: draw any attached cards underneath `parent`. They stack from
   // index 0 (peeks the most) to length-1 (just behind parent), offset in
   // the parent's local "up" direction.
-  const drawAttachedFor = (parent) => {
+  //
+  // Two complications:
+  //   1. The opp canvas is CSS-rotated 180°. Without compensation, opp
+  //      stacks would visually extend toward the midline while the
+  //      player's own stacks extend upward, and the two halves would
+  //      disagree. The preferred peek direction in the canvas frame is
+  //      flipped for the opp side so the visual direction matches.
+  //   2. If extending in the preferred direction would put the furthest
+  //      attached card off the canvas (parent too close to that edge),
+  //      flip the direction so the whole stack stays visible.
+  const mirrorSign = mirrored ? -1 : 1;
+  const drawAttachedFor = (parent, parentOpts) => {
     if (!parent.attached || parent.attached.length === 0) return;
+    parentOpts = parentOpts || {};
     const baseX = posX(parent);
     const baseY = posY(parent);
     const rotRad = ((parent.rot || 0) * Math.PI) / 180;
-    const sinR = Math.sin(rotRad);
-    const cosR = Math.cos(rotRad);
+    const dxUnit = mirrorSign * Math.sin(rotRad);
+    const dyUnit = mirrorSign * -Math.cos(rotRad);
+    // Scale the peek to match the visual scale of the cards so the
+    // proportional "stick out" stays consistent.
+    const peekScale =
+      parentOpts.hovered || parentOpts.lifted ? 1 : BOARD_CARD_SCALE;
+    const total = parent.attached.length * ATTACH_PEEK_PX * peekScale;
+    const probeX = baseX + total * dxUnit;
+    const probeY = baseY + total * dyUnit;
+    const fits =
+      probeX >= 0 &&
+      probeX + CARD_W <= w &&
+      probeY >= 0 &&
+      probeY + CARD_H <= h;
+    const flipSign = fits ? 1 : -1;
     for (let i = 0; i < parent.attached.length; i++) {
       const att = parent.attached[i];
-      const peek = (parent.attached.length - i) * ATTACH_PEEK_PX;
-      const dx = peek * sinR;
-      const dy = -peek * cosR;
-      // The attached card adopts the parent's rotation while attached.
+      const peek = (parent.attached.length - i) * ATTACH_PEEK_PX * peekScale;
+      const dx = flipSign * peek * dxUnit;
+      const dy = flipSign * peek * dyUnit;
+      // The attached card adopts the parent's rotation, hover state,
+      // and drag state while attached — so the whole stack scales
+      // together rather than the parent popping up alone.
       const attDraw = Object.assign({}, att, { rot: parent.rot || 0 });
-      drawCard(ctx, attDraw, baseX + dx, baseY + dy, { mirrored });
+      drawCard(ctx, attDraw, baseX + dx, baseY + dy, {
+        mirrored,
+        hovered: parentOpts.hovered,
+        lifted: parentOpts.lifted,
+      });
     }
   };
   let liftedCard = null;
@@ -547,9 +1105,10 @@ function drawBoard(canvas, ctx, cards, hoverId) {
       liftedCard = c;
       continue;
     }
-    drawAttachedFor(c);
+    const isHovered = hoverId === c.id;
+    drawAttachedFor(c, { hovered: isHovered });
     drawCard(ctx, c, posX(c), posY(c), {
-      hovered: hoverId === c.id,
+      hovered: isHovered,
       mirrored,
     });
   }
@@ -559,10 +1118,13 @@ function drawBoard(canvas, ctx, cards, hoverId) {
   // floats above everything).
   if (canvas === selfCanvas && attachTargetId != null) {
     const target = cards.find((c) => c.id === attachTargetId);
-    if (target) drawAttachPreview(ctx, target, posX(target), posY(target));
+    if (target) {
+      const targetScale = hoverId === target.id ? 1 : BOARD_CARD_SCALE;
+      drawAttachPreview(ctx, target, posX(target), posY(target), targetScale);
+    }
   }
   if (liftedCard) {
-    drawAttachedFor(liftedCard);
+    drawAttachedFor(liftedCard, { lifted: true });
     drawCard(ctx, liftedCard, posX(liftedCard), posY(liftedCard), {
       lifted: true,
       mirrored,
@@ -621,6 +1183,14 @@ function hitTestPlay(px, py) {
   const { w, h } = boardSize(selfCanvas);
   for (let i = self.play.length - 1; i >= 0; i--) {
     const c = self.play[i];
+    // Hysteresis: already-hovered cards keep their grown (scale 1) hit
+    // area until the cursor leaves it, so a tiny mouse jitter near the
+    // edge doesn't make them shrink+grow repeatedly. Non-hovered cards
+    // use the visual (scaled) footprint so the click target tracks
+    // what you actually see.
+    const scale = c.id === hoveredCardId ? 1 : BOARD_CARD_SCALE;
+    const halfW = (CARD_W * scale) / 2;
+    const halfH = (CARD_H * scale) / 2;
     const cx = c.x * w + CARD_W / 2;
     const cy = c.y * h + CARD_H / 2;
     const rad = -((c.rot || 0) * Math.PI) / 180;
@@ -628,25 +1198,27 @@ function hitTestPlay(px, py) {
       dy = py - cy;
     const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
     const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
-    if (
-      lx >= -CARD_W / 2 &&
-      lx < CARD_W / 2 &&
-      ly >= -CARD_H / 2 &&
-      ly < CARD_H / 2
-    )
-      return c;
-    // Extend the hit region to cover the peek of any attached cards above
-    // the parent (in the parent's local frame). Clicking the peek selects
-    // the parent, so the whole stack moves together.
+    if (lx >= -halfW && lx < halfW && ly >= -halfH && ly < halfH) return c;
+    // Extend the hit region to cover the peek of any attached cards.
+    // Peek direction is adaptive (drawAttachedFor flips it when the
+    // stack wouldn't fit on the canvas), so we use the same fit probe
+    // the renderer uses to know which side the visible peek is on.
     if (c.attached && c.attached.length > 0) {
-      const extra = c.attached.length * ATTACH_PEEK_PX;
-      if (
-        lx >= -CARD_W / 2 &&
-        lx < CARD_W / 2 &&
-        ly >= -CARD_H / 2 - extra &&
-        ly < -CARD_H / 2
-      )
-        return c;
+      const extra = c.attached.length * ATTACH_PEEK_PX * scale;
+      const baseX = c.x * w;
+      const baseY = c.y * h;
+      const rotRad = ((c.rot || 0) * Math.PI) / 180;
+      // Self canvas: mirrorSign is +1, so preferred peek is local "up".
+      const probeX = baseX + extra * Math.sin(rotRad);
+      const probeY = baseY + extra * -Math.cos(rotRad);
+      const fits =
+        probeX >= 0 &&
+        probeX + CARD_W <= w &&
+        probeY >= 0 &&
+        probeY + CARD_H <= h;
+      const lyMin = fits ? -halfH - extra : halfH;
+      const lyMax = fits ? -halfH : halfH + extra;
+      if (lx >= -halfW && lx < halfW && ly >= lyMin && ly < lyMax) return c;
     }
   }
   return null;
@@ -742,7 +1314,17 @@ function log(msg) {
   const el = document.getElementById("log");
   const e = document.createElement("div");
   e.className = "entry";
-  e.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  // Split timestamp + message into spans so the stylesheet can give the
+  // timestamp tabular-numeral mono weighting and the message regular
+  // contrast, without falling back to the generic "[HH:MM:SS] msg" look.
+  const t = document.createElement("span");
+  t.className = "ts";
+  t.textContent = new Date().toLocaleTimeString();
+  const m = document.createElement("span");
+  m.className = "msg";
+  m.textContent = msg;
+  e.appendChild(t);
+  e.appendChild(m);
   el.appendChild(e);
   el.scrollTop = el.scrollHeight;
 }
@@ -788,7 +1370,7 @@ function getIceServers() {
 }
 
 async function buildPeerOpts() {
-  return { config: { iceServers: await getIceServers() } };
+  return { debug: 2, config: { iceServers: await getIceServers() } };
 }
 
 // Prefetch on script load so creds are warm by the time the user clicks
@@ -818,13 +1400,27 @@ function extractPeerId(input) {
   return s;
 }
 
+// Set when the user explicitly clicked Host/Join so the on("open")
+// handler knows to send a "reset" signal to the opp. Cleared after
+// sending. Auto-rejoin (via the ?join= URL parameter on refresh) does
+// NOT set this — refreshing should preserve the saved board, not wipe
+// it.
+let pendingReset = false;
+// Set while the URL auto-join is running so join() knows to skip the
+// fresh-deck reset.
+let autoJoining = false;
+
 async function host() {
+  // Clicking Host starts a new game — wipe our board and signal the
+  // opp (when they connect) to wipe theirs too.
+  newDeck();
+  pendingReset = true;
   if (peer) peer.destroy();
-  setStatus("Creating room…");
+  setStatus("Hosting game…");
   peer = new Peer(await buildPeerOpts());
   peer.on("open", (id) => {
     const link = hostLink(id);
-    setStatus("Share the link below to invite your opponent", "connected");
+    setStatus("Share the link to invite your opponent", "connected");
     log("Hosting as " + id);
     log("Share link: " + link);
     const input = document.getElementById("joinId");
@@ -847,6 +1443,12 @@ async function host() {
 async function join() {
   const target = extractPeerId(document.getElementById("joinId").value);
   if (!target) return;
+  // Manual join → wipe local board + signal opp. Auto-rejoin after a
+  // refresh skips this so the saved board comes back intact.
+  if (!autoJoining) {
+    newDeck();
+    pendingReset = true;
+  }
   if (peer) peer.destroy();
   setStatus("Connecting…");
   peer = new Peer(await buildPeerOpts());
@@ -886,13 +1488,39 @@ function wireConn() {
     clearTimeout(openTimeout);
     setStatus("Connected", "connected");
     log("Connection established");
+    // If we just hit Host or Join (not auto-rejoin), ask the opp to
+    // wipe their board too so both sides start at zero.
+    if (pendingReset) {
+      pendingReset = false;
+      conn.send({ type: "reset" });
+    }
+    // Tell the opp our accent so they render our card backs in our
+    // color. Both sides fire this on open, so we exchange creds with
+    // no order assumption.
+    conn.send({ type: "hello", palette: selfPaletteName });
     broadcastState();
   });
   conn.on("data", (data) => {
     if (!data) return;
     if (data.type === "state") receiveOppState(data);
+    else if (data.type === "move") receiveOppMove(data);
     else if (data.type === "log") log("Opponent: " + data.message);
     else if (data.type === "ping") triggerPing(data.side, data.cardId);
+    else if (data.type === "reset") {
+      // Opp clicked Host/Join — wipe our board. newDeck() rebroadcasts
+      // so the opp's view of us updates to the fresh state.
+      log("Opponent started a new game — board reset");
+      newDeck();
+    } else if (data.type === "hello") {
+      if (data.palette && ACCENT_PALETTES[data.palette]) {
+        oppPaletteName = data.palette;
+        applyOppPalette();
+        // Re-render so opp's deck/discard/played card backs pick up
+        // the new palette immediately.
+        if (typeof renderOpp === "function") renderOpp();
+        if (typeof drawOpp === "function") drawOpp();
+      }
+    }
   });
   conn.on("close", () => {
     clearTimeout(openTimeout);
@@ -924,10 +1552,31 @@ function receiveOppState(data) {
   }
   opp.deckCount = data.deckCount;
   opp.handCount = data.handCount;
-  opp.discard = data.discard;
+  opp.discard = data.discard || [];
+  opp.set = data.set || [];
   opp.play = newPlay;
   opp.counters = data.counters || { deck: 0 };
   renderOpp();
+  ensureAnim();
+}
+
+// Apply a lightweight drag-move delta from the opponent. Only the moving
+// card's position (and rotation) changes; the rest of opp state is left
+// alone. The existing _renderX/_renderY lerp origin is preserved so
+// movement still animates smoothly toward the new target. If the card
+// isn't in opp.play yet (which can happen if a "move" arrives before
+// the first full "state"), the delta is dropped — the next full state
+// sync will catch up.
+function receiveOppMove(data) {
+  const c = opp.play.find((x) => x.id === data.id);
+  if (!c) return;
+  if (c._renderX == null) {
+    c._renderX = c.x;
+    c._renderY = c.y;
+  }
+  c.x = data.x;
+  c.y = data.y;
+  if (data.rot != null) c.rot = data.rot;
   ensureAnim();
 }
 
@@ -999,7 +1648,7 @@ function drawPing(ctx, cx, cy, elapsed) {
   // Outer ring: expands and fades.
   const r1 = 28 + t * 72;
   const a1 = Math.max(0, 1 - t);
-  ctx.strokeStyle = `rgba(74, 127, 180, ${a1})`;
+  ctx.strokeStyle = `rgba(${currentRenderPalette.accentRgb}, ${a1})`;
   ctx.lineWidth = 4 * (1 - 0.6 * t);
   ctx.beginPath();
   ctx.arc(cx, cy, r1, 0, Math.PI * 2);
@@ -1018,6 +1667,29 @@ function drawPing(ctx, cx, cy, elapsed) {
   ctx.restore();
 }
 
+// Lightweight delta for in-drag position updates. Sends only the moving
+// card's id + new x/y + rot, instead of the full state. The drop / any
+// discrete action (attach, flip, zone change, …) still triggers a full
+// broadcastState() so attachments and complex state stay in sync — but
+// the *hot* path during a drag is 30 packets/sec × ~40 bytes instead of
+// 30 × ~1 KB, cutting drag bandwidth ~25×. Crucial for the TURN-relay
+// fallback where every relayed byte counts against the metered quota.
+let dragBroadcastTimer = null;
+function broadcastDragMoveThrottled(card) {
+  if (dragBroadcastTimer != null) return;
+  dragBroadcastTimer = setTimeout(() => {
+    dragBroadcastTimer = null;
+    if (!conn || !conn.open) return;
+    conn.send({
+      type: "move",
+      id: card.id,
+      x: card.x,
+      y: card.y,
+      rot: card.rot || 0,
+    });
+  }, 33);
+}
+
 // Coalesce broadcast bursts during a drag — sending every pointermove (60Hz+)
 // would flood the data channel, while sending only on drop is choppy. ~30Hz
 // is plenty for smooth lerping on the receiver.
@@ -1031,6 +1703,10 @@ function broadcastStateThrottled() {
 }
 
 function broadcastState() {
+  // Persist regardless of connection state — even offline edits should
+  // survive a refresh so the player can reconnect with their board
+  // intact.
+  saveLocalState();
   if (!conn || !conn.open) return;
   // For face-down cards we hide the rank/suit from the opponent so they
   // can't peek by inspecting the wire data. The counter and attached
@@ -1061,6 +1737,7 @@ function broadcastState() {
     deckCount: self.deck.length,
     handCount: self.hand.length,
     discard: self.discard,
+    set: self.set,
     play: playForOpp,
     counters: self.counters,
   });
@@ -1078,8 +1755,12 @@ function newDeck() {
   shuffleInPlace(self.deck);
   self.hand = [];
   self.discard = [];
+  self.set = [];
   self.play = [];
-  self.counters = { deck: 30 };
+  self.counters = { deck: FORMATS.full.counterDefault };
+  currentFormat = "full";
+  const _sel = document.getElementById("formatSelect");
+  if (_sel) _sel.value = "full";
   log("Created and shuffled a new 54-card deck");
   notifyOpp("created a new deck");
   renderSelf();
@@ -1119,6 +1800,55 @@ function searchDeck() {
   });
 }
 
+// Variant of searchDeck triggered by clicking the sigil slot — the
+// chosen card moves to the side pile instead of the hand. The slot
+// holds at most one card; this function is a no-op if a sigil is
+// already chosen (the caller also guards this).
+function searchDeckForSet() {
+  if (self.set.length > 0) return;
+  openModal(
+    "Select Sigil",
+    self.deck.filter((c) =>
+      [
+        "H:J",
+        "H:Q",
+        "H:K",
+        "D:J",
+        "D:Q",
+        "D:K",
+        "S:J",
+        "S:Q",
+        "S:K",
+        "C:J",
+        "C:Q",
+        "C:K",
+        "J:RED",
+        "J:BLACK",
+      ].includes(specKey(c)),
+    ),
+    (c) => {
+      // Re-check in case the slot got filled between modal open and
+      // pick (e.g., opp signalled a state change).
+      if (self.set.length > 0) {
+        closeModal();
+        return;
+      }
+      const idx = self.deck.findIndex((x) => x.id === c.id);
+      if (idx < 0) return;
+      const [card] = self.deck.splice(idx, 1);
+      self.set.push(card);
+      log("Sigil: " + cardLabel(card));
+      notifyOpp("chose a sigil");
+      renderSelf();
+      broadcastState();
+      closeModal();
+    },
+    {
+      condensed: true,
+    },
+  );
+}
+
 function viewDiscard(pile, title) {
   // Discard piles render flat (no suit grouping), with the top of the
   // pile (most recently discarded) shown first.
@@ -1148,6 +1878,10 @@ function searchDiscard() {
 
 function moveCard(source, target, opts) {
   opts = opts || {};
+  // Sigil slot is a 1-card zone — refuse any move that would push a
+  // second card into it. Done up front (before the source removal)
+  // so the dragged card stays in its original place.
+  if (target.type === "set" && self.set.length > 0) return;
   let card;
   // Any cards that travel WITH the primary (the parent's attached stack).
   // They go to the same destination as the parent and become unattached.
@@ -1162,6 +1896,9 @@ function moveCard(source, target, opts) {
   } else if (source.type === "discardTop") {
     if (self.discard.length === 0) return;
     card = self.discard.pop();
+  } else if (source.type === "setTop") {
+    if (self.set.length === 0) return;
+    card = self.set.pop();
   } else if (source.type === "play") {
     const i = self.play.findIndex((c) => c.id === source.cardId);
     if (i < 0) return;
@@ -1198,6 +1935,9 @@ function moveCard(source, target, opts) {
   } else if (target.type === "discard") {
     for (const a of attachedCards) self.discard.push(a);
     self.discard.push(card);
+  } else if (target.type === "set") {
+    for (const a of attachedCards) self.set.push(a);
+    self.set.push(card);
   } else if (target.type === "play") {
     card.x = opts.x;
     card.y = opts.y;
@@ -1237,6 +1977,11 @@ function describeAction(s, t) {
     "play-deckTop": "Returned to top of deck:",
     "play-deckBottom": "Sent to bottom of deck:",
     "play-discard": "Discarded from play:",
+    "setTop-hand": "Moved from set to hand:",
+    "setTop-play": "Played from set:",
+    "setTop-discard": "Discarded from set:",
+    "setTop-deckTop": "Returned to top of deck from set:",
+    "setTop-deckBottom": "Sent to bottom of deck from set:",
   };
   return m[`${s}-${t}`] || "Moved:";
 }
@@ -1256,6 +2001,12 @@ function describeActionOpp(s, t) {
     "play-deckTop": "returned a card to top of deck",
     "play-deckBottom": "sent a card to bottom of deck",
     "play-discard": "discarded a card from play",
+    "setTop-hand": "moved a card from their set pile to their hand",
+    "setTop-play": "played a card from their set pile",
+    "setTop-discard": "discarded a card from their set pile",
+    "setTop-deckTop": "moved a card from their set pile to their deck",
+    "setTop-deckBottom":
+      "sent a card from their set pile to the bottom of their deck",
   };
   return m[`${s}-${t}`] || "moved a card";
 }
@@ -1319,7 +2070,7 @@ function faceDownCardEl(opts) {
 function findDropZone(under) {
   if (!under) return null;
   return under.closest(
-    "#selfBoard, #selfDeckPile, #selfDiscardPile, #selfHand, .half.self .hand-row",
+    "#selfBoard, #selfDeckPile, #selfDiscardPile, #selfSetPile, #selfHand, .half.self .hand-row",
   );
 }
 
@@ -1414,7 +2165,7 @@ function onGhostUp(e) {
     drag.ghost.style.display = "";
     const target = findDropZone(under);
     performGhostDrop(target);
-    suppressNextClick = true;
+    armClickSuppression();
   }
   cleanupGhost();
 }
@@ -1455,6 +2206,9 @@ function performGhostDrop(targetEl) {
   } else if (targetEl.id === "selfDiscardPile") {
     if (src.type === "discardTop") return;
     moveCard(src, { type: "discard" });
+  } else if (targetEl.id === "selfSetPile") {
+    if (src.type === "setTop") return;
+    moveCard(src, { type: "set" });
   } else {
     if (src.type === "hand") return;
     moveCard(src, { type: "hand" });
@@ -1590,9 +2344,10 @@ function onCanvasMove(e) {
     attachTargetId = null;
   }
   drawSelf();
-  // Stream the new position to the opponent so they see smooth movement
-  // instead of a single snap at drop time.
-  broadcastStateThrottled();
+  // Stream the new position to the opponent as a minimal delta so they
+  // see smooth movement instead of a single snap at drop time, without
+  // re-sending the whole game state on every pointer tick.
+  broadcastDragMoveThrottled(card);
 
   const under = document.elementFromPoint(e.clientX, e.clientY);
   const zone = findDropZone(under);
@@ -1613,6 +2368,10 @@ function onCanvasUp(e) {
   if (broadcastTimer != null) {
     clearTimeout(broadcastTimer);
     broadcastTimer = null;
+  }
+  if (dragBroadcastTimer != null) {
+    clearTimeout(dragBroadcastTimer);
+    dragBroadcastTimer = null;
   }
 
   if (!wasStarted) {
@@ -1643,6 +2402,7 @@ function onCanvasUp(e) {
     const src = { type: "play", cardId };
     if (zone.id === "selfDeckPile") moveCard(src, { type: "deckTop" });
     else if (zone.id === "selfDiscardPile") moveCard(src, { type: "discard" });
+    else if (zone.id === "selfSetPile") moveCard(src, { type: "set" });
     else moveCard(src, { type: "hand" });
   } else {
     // Dropped within the canvas. If the dragged card now overlaps another
@@ -1672,7 +2432,7 @@ function onCanvasUp(e) {
       broadcastState();
     }
   }
-  suppressNextClick = true;
+  armClickSuppression();
 }
 
 // Like hitTestPlay but skips a given cardId — used to look for an attach
@@ -1686,6 +2446,10 @@ function findOtherCardAt(px, py, excludeId) {
     // first. Skipping here also hides the green attach-preview outline
     // on face-down cards during drag.
     if (c.faceDown) continue;
+    // Match the visible (scaled) footprint so the drag has to overlap
+    // the target card you actually see.
+    const halfW = (CARD_W * BOARD_CARD_SCALE) / 2;
+    const halfH = (CARD_H * BOARD_CARD_SCALE) / 2;
     const cx = c.x * w + CARD_W / 2;
     const cy = c.y * h + CARD_H / 2;
     const rad = -((c.rot || 0) * Math.PI) / 180;
@@ -1693,13 +2457,7 @@ function findOtherCardAt(px, py, excludeId) {
       dy = py - cy;
     const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
     const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
-    if (
-      lx >= -CARD_W / 2 &&
-      lx < CARD_W / 2 &&
-      ly >= -CARD_H / 2 &&
-      ly < CARD_H / 2
-    )
-      return c;
+    if (lx >= -halfW && lx < halfW && ly >= -halfH && ly < halfH) return c;
   }
   return null;
 }
@@ -1990,6 +2748,22 @@ function renderSelf() {
     });
   }
 
+  // "Set aside" pile — face-up top card with a count badge. The top
+  // card is draggable to any other zone (same UX as discard).
+  document.getElementById("selfSetCount").textContent = self.set.length;
+  const setHost = document.querySelector("#selfSetPile .card-host");
+  setHost.innerHTML = "";
+  if (self.set.length > 0) {
+    const top = self.set[self.set.length - 1];
+    const el = cardEl(top);
+    setHost.appendChild(el);
+    attachGhostDrag(el, () => {
+      const t = self.set[self.set.length - 1];
+      return t ? { type: "setTop", cardId: t.id } : null;
+    });
+    attachCardTooltip(el, top);
+  }
+
   const hand = document.getElementById("selfHand");
   // Remove only card-wraps so the hand-pip (count badge) stays in place.
   hand.querySelectorAll(".card-wrap").forEach((el) => el.remove());
@@ -2024,6 +2798,16 @@ function renderOpp() {
   if (opp.discard.length > 0)
     discHost.appendChild(cardEl(opp.discard[opp.discard.length - 1]));
 
+  document.getElementById("oppSetCount").textContent = opp.set.length;
+  const oppSetHost = document.querySelector("#oppSetPile .card-host");
+  oppSetHost.innerHTML = "";
+  if (opp.set.length > 0) {
+    const top = opp.set[opp.set.length - 1];
+    const el = cardEl(top);
+    oppSetHost.appendChild(el);
+    attachCardTooltip(el, top);
+  }
+
   const oh = document.getElementById("oppHand");
   oh.querySelectorAll(".card-wrap").forEach((el) => el.remove());
   document.getElementById("oppHandCount").textContent = opp.handCount;
@@ -2051,26 +2835,77 @@ function closeCtx() {
 
 function buildCtx(items) {
   ctxMenu.innerHTML = "";
+  buildCtxInto(ctxMenu, items);
+}
+
+// Recursive helper so items with `submenu: [...]` can render a nested
+// menu inside the parent item. The submenu opens on hover (CSS-driven)
+// and items inside it close the entire chain via closeCtx().
+function buildCtxInto(container, items) {
   for (const it of items) {
     if (it.sep) {
       const s = document.createElement("div");
       s.className = "sep";
-      ctxMenu.appendChild(s);
+      container.appendChild(s);
     } else if (it.header) {
       const h = document.createElement("div");
       h.className = "header";
       h.textContent = it.header;
-      ctxMenu.appendChild(h);
+      container.appendChild(h);
     } else {
       const e = document.createElement("div");
       e.className = "item" + (it.disabled ? " disabled" : "");
-      e.textContent = it.label;
-      if (!it.disabled)
+      // Color preview rectangle, if any.
+      if (it.swatch) {
+        const sw = document.createElement("span");
+        sw.className = "ctx-swatch";
+        sw.style.background = it.swatch;
+        e.appendChild(sw);
+      }
+      const lbl = document.createElement("span");
+      lbl.className = "ctx-label";
+      lbl.textContent = it.label;
+      e.appendChild(lbl);
+      if (it.submenu) {
+        e.classList.add("has-submenu");
+        const arrow = document.createElement("span");
+        arrow.className = "ctx-arrow";
+        arrow.textContent = "›";
+        e.appendChild(arrow);
+        const sub = document.createElement("div");
+        sub.className = "ctx-submenu";
+        buildCtxInto(sub, it.submenu);
+        e.appendChild(sub);
+        // Flip the submenu to the LEFT of the parent if opening to the
+        // right would clip the viewport. Measured on first hover after
+        // the submenu has a real layout.
+        e.addEventListener("mouseenter", () => {
+          const parentRect = e.getBoundingClientRect();
+          // Temporarily reveal to measure, then restore so the existing
+          // CSS-hover-driven open still works.
+          const prevDisplay = sub.style.display;
+          const prevVisibility = sub.style.visibility;
+          sub.style.display = "flex";
+          sub.style.visibility = "hidden";
+          const subWidth = sub.offsetWidth;
+          sub.style.display = prevDisplay;
+          sub.style.visibility = prevVisibility;
+          const overflowsRight =
+            parentRect.right + subWidth > window.innerWidth - 4;
+          e.classList.toggle("flip-left", overflowsRight);
+          // Also flip up if the submenu would clip the bottom edge.
+          const subHeight = sub.scrollHeight;
+          const overflowsBottom =
+            parentRect.top + subHeight > window.innerHeight - 4;
+          e.classList.toggle("flip-up", overflowsBottom);
+        });
+      } else if (!it.disabled) {
         e.onclick = () => {
           it.onClick();
           closeCtx();
         };
-      ctxMenu.appendChild(e);
+      }
+      container.appendChild(e);
     }
   }
 }
@@ -2182,6 +3017,18 @@ function openDeckContext(x, y) {
     },
     { label: "Shuffle", onClick: shuffleDeck, disabled: self.deck.length < 2 },
     { sep: true },
+    {
+      label: "Change color",
+      swatch: ACCENT_PALETTES[selfPaletteName].cardBack,
+      submenu: PALETTE_NAMES.map((name) => ({
+        label: name.charAt(0).toUpperCase() + name.slice(1),
+        swatch: ACCENT_PALETTES[name].cardBack,
+        onClick: () => setSelfPalette(name),
+      })),
+    },
+    ...(currentFormat === "fast"
+      ? [{ label: "Edit Fast deck…", onClick: openFastFormatModal }]
+      : []),
     { label: "Reset", onClick: newDeck },
   ]);
   positionCtx(x, y);
@@ -2230,6 +3077,10 @@ function pileClick(handler) {
   return function (e) {
     if (suppressNextClick) {
       suppressNextClick = false;
+      if (suppressNextClickTimer != null) {
+        clearTimeout(suppressNextClickTimer);
+        suppressNextClickTimer = null;
+      }
       return;
     }
     e.stopPropagation();
@@ -2240,6 +3091,8 @@ function pileClick(handler) {
 // Deck counter +/- buttons (owner side only — opp counter has no buttons).
 function bumpDeckCounter(delta) {
   self.counters.deck = (self.counters.deck || 0) + delta;
+  log("HP: " + self.counters.deck);
+  notifyOpp("set their HP to " + self.counters.deck);
   renderSelf();
   broadcastState();
 }
@@ -2311,6 +3164,25 @@ document
     openOppDiscardContext(e.clientX, e.clientY);
   });
 
+// Sigil slot — clicking your own opens the "Select Sigil" picker
+// (the chosen card moves to the slot instead of the hand). The slot
+// holds at most one card, so clicking it when it's already occupied
+// does nothing — the player must drag the existing sigil out first
+// to swap. Clicking opp's slot views their chosen sigil.
+document.getElementById("selfSetPile").addEventListener(
+  "click",
+  pileClick(() => {
+    if (self.set.length > 0) return;
+    if (self.deck.length) searchDeckForSet();
+  }),
+);
+document.getElementById("oppSetPile").addEventListener(
+  "click",
+  pileClick(() => {
+    if (opp.set.length) viewDiscard(opp.set, "Opponent's sigil");
+  }),
+);
+
 document.addEventListener("click", (e) => {
   if (e.target.closest(".ctx-menu")) return;
   closeCtx();
@@ -2320,6 +3192,7 @@ window.addEventListener("keydown", (e) => {
     closeCtx();
     closeModal();
     if (typeof closeGuide === "function") closeGuide();
+    if (typeof closeFormatModal === "function") closeFormatModal();
     cleanupAnyDrag();
   }
 });
@@ -2340,10 +3213,15 @@ function openModal(title, cards, onPick, opts) {
   const list = document.getElementById("modalList");
   list.innerHTML = "";
   list.style.minHeight = "";
+  list.style.width = "";
   // `flat: true` skips the suit grouping and renders cards in the
   // caller-supplied order. Used for discard views, where pile order
   // matters more than suit organization.
+  // `condensed: true` keeps the suit grouping + labels but drops the
+  // fixed 14-column grid + rank divider — each suit just flex-wraps,
+  // so the modal stays narrow when the cards are unevenly distributed.
   const flat = !!opts.flat;
+  const condensed = !flat && !!opts.condensed;
   const renderCards = flat ? cards.slice() : cards.slice().sort(sortForView);
   if (renderCards.length === 0) {
     const empty = document.createElement("div");
@@ -2401,17 +3279,20 @@ function openModal(title, cards, onPick, opts) {
         // Standard suits use a fixed 14-column grid (one column per
         // rank + a thin divider column) so face cards stay aligned
         // across suits even when number cards are missing. Jokers
-        // keep the simple flex-wrap layout.
+        // keep the simple flex-wrap layout. `condensed` forces every
+        // suit to flex-wrap so the modal stays narrow.
         currentSection.className =
-          c.suit === "J" ? "suit-cards" : "suit-cards suit-grid";
+          c.suit === "J" || condensed ? "suit-cards" : "suit-cards suit-grid";
         group.appendChild(currentSection);
         list.appendChild(group);
       }
       // Drop a thin divider between the number cards (2–10) and the
       // ace/face cards within a standard suit. Jokers have no numbers
-      // so they're naturally skipped.
+      // so they're naturally skipped. Condensed view skips the divider
+      // too since there's no fixed column alignment to anchor it to.
       if (
         c.suit !== "J" &&
+        !condensed &&
         isFaceOrAce(c.rank) &&
         seenNumberInSuit &&
         !dividerInsertedInSuit
@@ -2430,8 +3311,10 @@ function openModal(title, cards, onPick, opts) {
         el.style.cursor = "default";
       }
       // Pin each card to its rank's column inside .suit-grid so missing
-      // cards leave a gap, not a slide.
-      if (c.suit !== "J") el.style.gridColumn = String(RANK_COL[c.rank]);
+      // cards leave a gap, not a slide. Condensed view doesn't use the
+      // grid, so no fixed column.
+      if (c.suit !== "J" && !condensed)
+        el.style.gridColumn = String(RANK_COL[c.rank]);
       attachCardTooltip(el, c);
       currentSection.appendChild(el);
     }
@@ -2447,8 +3330,19 @@ function openModal(title, cards, onPick, opts) {
 // at column 10.
 const VIEW_SUIT_ORDER = { H: 0, D: 1, S: 2, C: 3, J: 4 };
 const RANK_COL = {
-  "2": 1, "3": 2, "4": 3, "5": 4, "6": 5, "7": 6,
-  "8": 7, "9": 8, "10": 9, "A": 11, "J": 12, "Q": 13, "K": 14,
+  2: 1,
+  3: 2,
+  4: 3,
+  5: 4,
+  6: 5,
+  7: 6,
+  8: 7,
+  9: 8,
+  10: 9,
+  A: 11,
+  J: 12,
+  Q: 13,
+  K: 14,
 };
 const VIEW_RANK_ORDER = [
   "2",
@@ -2511,9 +3405,13 @@ function renderDrawMany() {
     "Click a card to move it into your hand";
   const list = document.getElementById("modalList");
   list.innerHTML = "";
-  // Reserve room for one row of small cards so the footer doesn't jump
-  // down between "no cards revealed" and the first reveal.
-  list.style.minHeight = "92px";
+  // Reserve a stable footprint so the footer buttons don't shift as
+  // cards are revealed. Width is *pinned* (not just min-width) so the
+  // row actually wraps at ~10 cards instead of letting the modal grow
+  // sideways. Height covers 2 wrapped rows of small cards (76 + 6 gap +
+  // 76 = 158) — enough for a normal draw-many session.
+  list.style.width = "600px";
+  list.style.minHeight = "160px";
   if (drawManyState.revealed.length === 0) {
     const hint = document.createElement("div");
     hint.style.color = "var(--muted)";
@@ -2614,6 +3512,302 @@ document.getElementById("btnRollD20").onclick = () => {
 document.getElementById("modalClose").onclick = closeModal;
 document.getElementById("modal").addEventListener("click", (e) => {
   if (e.target.id === "modal") closeModal();
+});
+
+// ============================================================
+// Format selector
+// ============================================================
+const formatSelect = document.getElementById("formatSelect");
+const formatModalEl = document.getElementById("formatModal");
+const formatPremadesEl = document.getElementById("formatPremades");
+const formatCardPickerEl = document.getElementById("formatCardPicker");
+const formatCardCountEl = document.getElementById("formatCardCount");
+const formatApplyBtn = document.getElementById("formatApply");
+const formatClearBtn = document.getElementById("formatClearPick");
+const formatExportBtn = document.getElementById("formatExport");
+const formatImportBtn = document.getElementById("formatImport");
+const formatDeckCodeEl = document.getElementById("formatDeckCode");
+const formatShareStatusEl = document.getElementById("formatShareStatus");
+
+// Reflect the persisted/current format in the dropdown on boot.
+formatSelect.value = FORMATS[currentFormat] ? currentFormat : "full";
+
+formatSelect.addEventListener("change", () => {
+  const v = formatSelect.value;
+  if (v === "full") {
+    selectFullFormat();
+  } else if (v === "fast") {
+    openFastFormatModal();
+  }
+});
+
+// Tracks the cards picked in the modal as a Set of "suit:rank" keys.
+// Reset each time the modal opens from the last-applied deck so the
+// player sees their previous selection.
+const formatPickerSelection = new Set();
+
+function specKey(c) {
+  return c.suit + ":" + c.rank;
+}
+function specFromKey(k) {
+  const [suit, rank] = k.split(":");
+  return { suit, rank };
+}
+
+// All 54 unique cards (52 standard + 2 jokers), the deck the picker
+// shows. Build once on first open and reuse.
+let formatPickerAllCards = null;
+function formatPickerAllCardsLazy() {
+  if (formatPickerAllCards) return formatPickerAllCards;
+  const cards = [];
+  for (const suit of ["H", "D", "S", "C"]) {
+    for (const rank of RANKS) cards.push({ suit, rank });
+  }
+  cards.push({ suit: "J", rank: "RED" });
+  cards.push({ suit: "J", rank: "BLACK" });
+  formatPickerAllCards = cards;
+  return cards;
+}
+
+// Build the picker grid: standard suits in the same fixed 14-column
+// grid the search-deck modal uses (so face cards align), jokers in a
+// simple flex row.
+function renderFormatCardPicker() {
+  formatCardPickerEl.innerHTML = "";
+  const SUIT_NAMES = {
+    S: "Spades",
+    H: "Hearts",
+    D: "Diamonds",
+    C: "Clubs",
+    J: "Jokers",
+  };
+  const isFaceOrAce = (r) => r === "A" || r === "J" || r === "Q" || r === "K";
+  const all = formatPickerAllCardsLazy();
+  // Group by suit using VIEW_SUIT_ORDER so the order matches the
+  // search-deck modal (hearts, diamonds, spades, clubs, jokers).
+  const groups = { H: [], D: [], S: [], C: [], J: [] };
+  for (const c of all) groups[c.suit].push(c);
+  // Sort each suit by VIEW_RANK_ORDER for non-jokers.
+  for (const suit of ["H", "D", "S", "C"]) {
+    groups[suit].sort(
+      (a, b) =>
+        VIEW_RANK_ORDER.indexOf(a.rank) - VIEW_RANK_ORDER.indexOf(b.rank),
+    );
+  }
+  for (const suit of ["H", "D", "S", "C", "J"]) {
+    const cards = groups[suit];
+    if (!cards || !cards.length) continue;
+    const group = document.createElement("div");
+    group.className = "suit-group";
+    const label = document.createElement("div");
+    label.className =
+      "suit-label" + (suit === "H" || suit === "D" ? " red" : "");
+    const sym = document.createElement("span");
+    sym.className = "sym";
+    sym.textContent = SUIT_SYMBOL[suit] || "★";
+    label.appendChild(sym);
+    label.appendChild(document.createTextNode(SUIT_NAMES[suit] || ""));
+    group.appendChild(label);
+    const row = document.createElement("div");
+    row.className = "suit-cards" + (suit === "J" ? "" : " suit-grid");
+    let seenNumber = false;
+    let dividerInserted = false;
+    for (const spec of cards) {
+      // Drop a divider between number cards and ace/face within a
+      // standard suit. Matches the search-deck modal.
+      if (
+        suit !== "J" &&
+        isFaceOrAce(spec.rank) &&
+        seenNumber &&
+        !dividerInserted
+      ) {
+        const divider = document.createElement("div");
+        divider.className = "rank-divider";
+        row.appendChild(divider);
+        dividerInserted = true;
+      }
+      if (!isFaceOrAce(spec.rank)) seenNumber = true;
+      const cardObj = {
+        id: "pick-" + spec.suit + "-" + spec.rank,
+        suit: spec.suit,
+        rank: spec.rank,
+      };
+      const el = cardEl(cardObj, { small: true });
+      const key = specKey(spec);
+      if (formatPickerSelection.has(key)) el.classList.add("picked");
+      el.onclick = () => {
+        if (formatPickerSelection.has(key)) {
+          formatPickerSelection.delete(key);
+          el.classList.remove("picked");
+        } else {
+          formatPickerSelection.add(key);
+          el.classList.add("picked");
+        }
+        updateFormatCardCount();
+      };
+      attachCardTooltip(el, cardObj);
+      if (suit !== "J") el.style.gridColumn = String(RANK_COL[spec.rank]);
+      row.appendChild(el);
+    }
+    group.appendChild(row);
+    formatCardPickerEl.appendChild(group);
+  }
+}
+
+function openFastFormatModal() {
+  // Populate the premade buttons.
+  formatPremadesEl.innerHTML = "";
+  for (const name of Object.keys(PREMADE_FAST_DECKS)) {
+    const btn = document.createElement("button");
+    btn.className = "secondary";
+    btn.type = "button";
+    btn.textContent = name;
+    btn.onclick = () => {
+      // Premades apply directly so users can start fast, but the
+      // modal stays open so the player can tweak the selection
+      // afterwards. Re-render the picker so the chosen cards show
+      // their `picked` highlight, and refresh the count display.
+      const specs = resolvePremadeDeck(PREMADE_FAST_DECKS[name]);
+      if (!specs.length) return;
+      formatPickerSelection.clear();
+      for (const s of specs) formatPickerSelection.add(specKey(s));
+      applyFastDeck(specs, name, specs.map(cardSpecToCode).join("\n"));
+      renderFormatCardPicker();
+      updateFormatCardCount();
+    };
+    formatPremadesEl.appendChild(btn);
+  }
+  // Prime the selection set from the last-applied deck text so the
+  // modal reopens with the player's previous picks already toggled.
+  formatPickerSelection.clear();
+  if (lastFastDeckText) {
+    const { cards } = parseDeckText(lastFastDeckText);
+    for (const c of cards) formatPickerSelection.add(specKey(c));
+  }
+  renderFormatCardPicker();
+  // updateFormatCardCount() also (re)populates the deck-code textbox
+  // with the encoded current selection, so it always shows the live
+  // code without the player needing to click Export first.
+  updateFormatCardCount();
+  // Clear any stale export/import status from last time.
+  setFormatShareStatus("", null);
+  formatModalEl.classList.add("open");
+}
+
+function closeFormatModal() {
+  formatModalEl.classList.remove("open");
+  // If the user cancelled or closed without applying, snap the select
+  // back to whatever format is actually in effect (don't leave it
+  // showing "Fast" when no Fast deck was applied).
+  formatSelect.value = FORMATS[currentFormat] ? currentFormat : "full";
+}
+
+function updateFormatCardCount() {
+  const n = formatPickerSelection.size;
+  formatCardCountEl.textContent = `${n} / ${FAST_DECK_SIZE} cards`;
+  const wrongSize = n !== FAST_DECK_SIZE && n > 0;
+  formatCardCountEl.classList.toggle("error", wrongSize);
+  formatApplyBtn.disabled = n === 0;
+  // Keep the deck-code textbox in sync with the current picker
+  // selection so the player can copy / share at any moment without
+  // first clicking Export.
+  formatDeckCodeEl.value = encodeFastDeck(
+    Array.from(formatPickerSelection, specFromKey),
+  );
+}
+
+formatApplyBtn.addEventListener("click", () => {
+  if (formatPickerSelection.size === 0) return;
+  const specs = Array.from(formatPickerSelection, specFromKey);
+  applyFastDeck(
+    specs,
+    specs.length === FAST_DECK_SIZE
+      ? "Custom"
+      : `Custom (${specs.length} cards)`,
+    specs.map(cardSpecToCode).join("\n"),
+  );
+  closeFormatModal();
+});
+
+formatClearBtn.addEventListener("click", () => {
+  formatPickerSelection.clear();
+  for (const el of formatCardPickerEl.querySelectorAll(".card.picked")) {
+    el.classList.remove("picked");
+  }
+  updateFormatCardCount();
+});
+
+// Set the share-row status message with a flavour class. Empty `text`
+// clears it. Auto-clears the ephemeral classes (ok/error) but leaves
+// the text in case the user wants to read it.
+let _formatShareStatusTimer = null;
+function setFormatShareStatus(text, flavour) {
+  formatShareStatusEl.textContent = text || "";
+  formatShareStatusEl.classList.remove("ok", "error");
+  if (flavour) formatShareStatusEl.classList.add(flavour);
+  if (_formatShareStatusTimer != null) {
+    clearTimeout(_formatShareStatusTimer);
+    _formatShareStatusTimer = null;
+  }
+  if (text) {
+    _formatShareStatusTimer = setTimeout(() => {
+      formatShareStatusEl.classList.remove("ok", "error");
+      _formatShareStatusTimer = null;
+    }, 4000);
+  }
+}
+
+formatExportBtn.addEventListener("click", () => {
+  const specs = Array.from(formatPickerSelection, specFromKey);
+  const code = encodeFastDeck(specs);
+  formatDeckCodeEl.value = code;
+  formatDeckCodeEl.focus();
+  formatDeckCodeEl.select();
+  // Best-effort copy to clipboard so the player can paste it anywhere.
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard
+      .writeText(code)
+      .then(() => setFormatShareStatus("Copied to clipboard", "ok"))
+      .catch(() =>
+        setFormatShareStatus(
+          `Exported ${specs.length} card${specs.length === 1 ? "" : "s"}`,
+          "ok",
+        ),
+      );
+  } else {
+    setFormatShareStatus(
+      `Exported ${specs.length} card${specs.length === 1 ? "" : "s"}`,
+      "ok",
+    );
+  }
+});
+
+formatImportBtn.addEventListener("click", () => {
+  const code = formatDeckCodeEl.value.trim();
+  if (!code) {
+    setFormatShareStatus("Paste a deck code first", "error");
+    return;
+  }
+  const specs = decodeFastDeck(code);
+  if (!specs) {
+    setFormatShareStatus("Invalid deck code", "error");
+    return;
+  }
+  formatPickerSelection.clear();
+  for (const s of specs) formatPickerSelection.add(specKey(s));
+  renderFormatCardPicker();
+  updateFormatCardCount();
+  setFormatShareStatus(
+    `Imported ${specs.length} card${specs.length === 1 ? "" : "s"}`,
+    "ok",
+  );
+});
+
+document
+  .getElementById("formatCancel")
+  .addEventListener("click", closeFormatModal);
+formatModalEl.addEventListener("click", (e) => {
+  if (e.target === formatModalEl) closeFormatModal();
 });
 
 // ============================================================
@@ -2757,15 +3951,68 @@ guideContainer.addEventListener(
 // Bootstrap
 // ============================================================
 setupCanvases();
-newDeck();
+if (!tryRestoreSavedBoard()) {
+  newDeck();
+}
 renderOpp();
 
+// Restore the local board (deck/hand/play/discard/counters) from
+// localStorage if a previous session is saved. Returns true if a
+// restore happened; the caller falls back to newDeck() if not.
+// Also re-seats `cardIdCounter` past the highest restored id so newly
+// drawn cards don't collide with the restored ones.
+function tryRestoreSavedBoard() {
+  const saved = _savedForBoot;
+  if (!saved || !Array.isArray(saved.deck)) return false;
+  if (
+    saved.deck.length +
+      (saved.hand ? saved.hand.length : 0) +
+      (saved.play ? saved.play.length : 0) +
+      (saved.discard ? saved.discard.length : 0) +
+      (saved.set ? saved.set.length : 0) ===
+    0
+  ) {
+    // Nothing to restore — treat as a fresh boot so newDeck() runs.
+    return false;
+  }
+  self.deck = saved.deck;
+  self.hand = saved.hand || [];
+  self.play = saved.play || [];
+  self.discard = saved.discard || [];
+  self.set = saved.set || [];
+  self.counters = saved.counters || { deck: 30 };
+  let maxId = 0;
+  const bump = (list) => {
+    for (const c of list || []) {
+      const n = parseInt(String(c.id || "").slice(1), 10);
+      if (!isNaN(n) && n > maxId) maxId = n;
+      if (c.attached) bump(c.attached);
+    }
+  };
+  bump(self.deck);
+  bump(self.hand);
+  bump(self.play);
+  bump(self.discard);
+  bump(self.set);
+  if (maxId > cardIdCounter) cardIdCounter = maxId;
+  log("Restored saved board (refresh-safe)");
+  renderSelf();
+  return true;
+}
+
 // If we landed here via a share link (`?join=PEER_ID`), auto-join.
+// `autoJoining` tells join() to skip the fresh-deck reset so the
+// player's restored board (loaded from localStorage above) survives
+// the refresh.
 (() => {
   const params = new URLSearchParams(window.location.search);
   const j = params.get("join");
   if (!j) return;
   document.getElementById("joinId").value = j;
-  // Defer slightly so PeerJS's cloud broker has a chance to be reachable.
-  setTimeout(join, 100);
+  setTimeout(() => {
+    autoJoining = true;
+    Promise.resolve(join()).finally(() => {
+      autoJoining = false;
+    });
+  }, 100);
 })();

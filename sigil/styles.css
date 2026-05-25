@@ -13,7 +13,7 @@
     --accent-glow: rgba(74, 127, 180, 0.78);
     --accent-tint: rgba(74, 127, 180, 0.16);
     --danger: #c47070;
-    --red: #b85c5c;
+    --red: #c44545;
     --ok: #88c098;
     /* Card-back palette — solid blue to pop against the near-black
        table. The sparkle mark is light gray, matching the reference. */
@@ -40,7 +40,7 @@ body {
     overflow: hidden;
 }
 header {
-    padding: 10px 16px;
+    padding: 7px 16px;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
     display: flex;
@@ -50,42 +50,67 @@ header {
     flex-shrink: 0;
 }
 header h1 {
-    font-size: 14px;
+    font-size: 13px;
     margin: 0;
     font-weight: 500;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
     color: var(--text);
+}
+/* Inline sigil — separates the local-action group (title + Guide /
+   Roll d20) from the network controls (Host / Join). Echoes the
+   card-back mark. */
+.header-sep {
+    color: var(--accent);
+    font-size: 18px;
+    line-height: 1;
+    user-select: none;
+    margin: 0 4px;
+}
+.header-version {
+    color: var(--accent);
+    font-size: 12px;
+    user-select: none;
+    line-height: 1;
+    vertical-align: top;
 }
 button {
     background: var(--accent);
-    color: #f5f5f5;
-    border: none;
-    padding: 6px 12px;
+    color: var(--accent-text, #f5f5f5);
+    border: 1px solid transparent;
+    padding: 6px 14px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 13px;
     font-family: inherit;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    transition:
+        background 0.1s ease,
+        border-color 0.1s ease,
+        color 0.1s ease;
 }
 button:hover {
     background: var(--accent2);
-    color: #f5f5f5;
+    color: var(--accent-text, #f5f5f5);
+}
+button:active {
+    transform: translateY(1px);
 }
 button.secondary {
-    background: var(--panel2);
-    border: 1px solid var(--border);
+    background: transparent;
+    border-color: var(--border);
     color: var(--text);
     font-weight: 500;
 }
 button.secondary:hover {
-    background: var(--border);
-    border-color: var(--accent-tint);
+    /* Keep text bright on hover so the affordance stays readable
+       regardless of palette — for dark accents (black) the accent
+       border alone would be invisible. The subtle bg lift gives a
+       visible feedback even when the accent itself is dim. */
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--accent);
     color: var(--text);
 }
 input[type="text"] {
-    background: var(--panel2);
+    background: transparent;
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -105,10 +130,48 @@ input[type="text"]:focus {
 input[type="text"]::placeholder {
     color: var(--muted);
 }
+.format-select {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 28px 6px 10px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    /* Tiny chevron rendered via SVG background so the native dropdown
+       indicator (which the appearance reset hid) still has a visual. */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23cfcfcf' stroke-width='1.5'><path d='M3 5l3 3 3-3'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 12px;
+}
+.format-select:hover,
+.format-select:focus {
+    border-color: var(--muted);
+    outline: none;
+}
+.format-select option {
+    background: var(--panel);
+    color: var(--text);
+}
+
 .status {
     margin-left: auto;
     color: var(--muted);
     font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.status::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
 }
 .status.connected {
     color: var(--ok);
@@ -139,15 +202,7 @@ input[type="text"]::placeholder {
 }
 .midline {
     height: 1px;
-    background: linear-gradient(
-        to right,
-        transparent 0%,
-        var(--border) 30%,
-        var(--accent) 50%,
-        var(--border) 70%,
-        transparent 100%
-    );
-    opacity: 0.55;
+    background: var(--border);
     margin: 0 6%;
     flex-shrink: 0;
 }
@@ -225,24 +280,25 @@ canvas.board {
     justify-content: center;
     align-items: center;
     flex-shrink: 0;
-    padding: 8px 0;
+    padding: 6px 0;
 }
 .hand {
     /* 80% of window, but clamped so ~120px of room is reserved on each
        side for the zones-side column. */
     width: min(80%, calc(100% - 240px));
-    min-height: 120px;
+    min-height: 118px;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 6px 8px;
-    border-radius: 10px;
+    border-radius: 4px;
     flex-wrap: wrap;
-    background: rgba(0, 0, 0, 0.18);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    background: rgba(0, 0, 0, 0.22);
     position: relative; /* anchor for the hand-pip count badge */
 }
-/* Small "current cards in hand" count badge in the hand's inner corner. */
+/* Small "current cards in hand" count in the hand's inner corner —
+   rectangular bordered chip matching the deck/discard pile count-badge
+   so the three "card-count" readouts share one visual language. */
 .hand-pip {
     position: absolute;
     bottom: 6px;
@@ -250,11 +306,13 @@ canvas.board {
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
-    border-radius: 10px;
-    padding: 1px 8px;
+    border-radius: 2px;
+    padding: 1px 5px;
+    font-family: ui-monospace, Menlo, monospace;
     font-size: 11px;
     font-weight: 600;
-    line-height: 1.4;
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
     pointer-events: none;
     z-index: 4;
 }
@@ -264,10 +322,10 @@ canvas.board {
     transform: rotate(180deg);
 }
 .half.self .hand {
-    border: 1px solid var(--accent-tint);
+    border: 1px solid var(--border);
 }
 .half.opp .hand {
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
 }
 .hand.opp {
     transform: rotate(180deg);
@@ -275,7 +333,7 @@ canvas.board {
 .hand.drag-over,
 .hand-row.drag-over {
     background: var(--accent-tint);
-    border-radius: 8px;
+    border-radius: 4px;
 }
 
 .card-wrap {
@@ -306,45 +364,52 @@ canvas.board {
     gap: 4px;
 }
 
-/* Number counter (above the deck and on cards). */
+/* Number counter (above the deck and on cards). Single rounded chip
+   with a "−", value, and "+" inside — visually mirrors the canvas
+   widget drawn on cards while C is held (see drawCounterWidget). */
 .counter {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    background: rgba(0, 0, 0, 0.28);
-    border: 1px solid var(--border-soft);
+    background: rgba(20, 20, 20, 0.92);
+    border: 1px solid var(--accent-tint);
     border-radius: 999px;
-    padding: 2px 4px;
+    padding: 0 2px;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--text);
     line-height: 1;
+    font-variant-numeric: tabular-nums;
 }
 .counter .cnum {
-    min-width: 18px;
+    min-width: 22px;
     text-align: center;
-    padding: 0 4px;
+    padding: 4px 4px;
 }
 .counter .cb {
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    width: 18px;
-    height: 18px;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    width: 20px;
+    height: 20px;
     padding: 0;
-    border-radius: 50%;
-    font-size: 13px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 500;
     line-height: 1;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    transition:
+        background 0.1s ease,
+        color 0.1s ease;
 }
 .counter .cb:hover {
-    background: var(--border);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--accent);
 }
 .counter.readonly {
-    padding: 2px 10px;
+    padding: 0 10px;
 }
 .zone .label {
     font-size: 10px;
@@ -364,9 +429,9 @@ canvas.board {
 .zone .pile .stacked {
     position: absolute;
     inset: 0;
-    background: var(--panel2);
-    border: 1px dashed var(--border-soft);
-    border-radius: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
 }
 .zone .pile.drag-over .stacked {
     border-color: var(--accent);
@@ -378,15 +443,18 @@ canvas.board {
 }
 .zone .pile .count-badge {
     position: absolute;
-    bottom: -6px;
-    right: -6px;
+    bottom: -4px;
+    right: -2px;
     background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
-    border-radius: 10px;
-    padding: 1px 7px;
+    border-radius: 2px;
+    padding: 1px 5px;
+    font-family: ui-monospace, Menlo, monospace;
     font-size: 11px;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
     z-index: 5;
     pointer-events: none;
 }
@@ -396,7 +464,7 @@ canvas.board {
     width: 70px;
     height: 98px;
     background: #e8e6df;
-    color: #141414;
+    color: #1f1f1f;
     border-radius: 5px;
     display: flex;
     flex-direction: column;
@@ -411,7 +479,19 @@ canvas.board {
     color: var(--red);
 }
 .card.face-down {
-    background: var(--card-back);
+    /* Subtle diagonal stripe pattern overlaid on the solid card-back
+       color. The stripe color is per-palette: light-with-low-alpha for
+       dark backs, dark-with-low-alpha for light backs, so the texture
+       reads regardless of which color the player picked. */
+    background:
+        repeating-linear-gradient(
+            45deg,
+            transparent 0,
+            transparent 6px,
+            var(--card-back-pattern) 6px,
+            var(--card-back-pattern) 7px
+        ),
+        var(--card-back);
     border: 1px solid var(--card-back-border);
     overflow: hidden;
 }
@@ -494,7 +574,7 @@ canvas.board {
     background: var(--panel);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 7px 10px;
     font-size: 12px;
     line-height: 1.35;
@@ -524,7 +604,7 @@ canvas.board {
     position: fixed;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 5px;
+    border-radius: 4px;
     padding: 4px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
     z-index: 200;
@@ -537,14 +617,18 @@ canvas.board {
 }
 .ctx-menu .item {
     padding: 6px 10px;
-    border-radius: 3px;
+    border-radius: 2px;
     cursor: pointer;
     font-size: 13px;
     color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: relative;
 }
 .ctx-menu .item:hover {
     background: var(--accent);
-    color: #f5f5f5;
+    color: var(--accent-text, #f5f5f5);
 }
 .ctx-menu .item.disabled {
     color: var(--muted);
@@ -553,6 +637,54 @@ canvas.board {
 .ctx-menu .item.disabled:hover {
     background: transparent;
     color: var(--muted);
+}
+.ctx-menu .ctx-label {
+    flex: 1;
+    min-width: 0;
+}
+.ctx-menu .ctx-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    border: 1px solid rgba(0, 0, 0, 0.4);
+    flex-shrink: 0;
+}
+.ctx-menu .item.has-submenu .ctx-arrow {
+    color: var(--muted);
+    margin-left: 6px;
+    font-size: 14px;
+    line-height: 1;
+}
+.ctx-menu .item.has-submenu:hover .ctx-arrow {
+    color: var(--accent-text, #f5f5f5);
+}
+.ctx-menu .ctx-submenu {
+    position: absolute;
+    top: -5px;
+    left: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px;
+    min-width: 140px;
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    z-index: 1;
+}
+.ctx-menu .item.has-submenu:hover > .ctx-submenu,
+.ctx-menu .ctx-submenu:hover {
+    display: flex;
+}
+/* Flip the submenu when opening to the right or down would clip the
+   viewport. JS adds the class on mouseenter after measuring. */
+.ctx-menu .item.has-submenu.flip-left > .ctx-submenu {
+    left: auto;
+    right: 100%;
+}
+.ctx-menu .item.has-submenu.flip-up > .ctx-submenu {
+    top: auto;
+    bottom: -5px;
 }
 .ctx-menu .sep {
     height: 1px;
@@ -583,20 +715,18 @@ canvas.board {
 .modal {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px;
+    border-radius: 4px;
+    padding: 22px 24px;
     max-width: 90vw;
     max-height: 80vh;
     overflow: auto;
     min-width: 420px;
 }
 .modal h3 {
-    margin: 0 0 12px;
-    font-size: 13px;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--accent);
+    margin: 0 0 14px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
 }
 
 /* Guide modal — image viewer with zoom + pan. Pin to a fixed size so the
@@ -642,7 +772,7 @@ canvas.board {
     overflow: auto;
     background: rgba(0, 0, 0, 0.35);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 4px;
     cursor: grab;
 }
 .guide-image-container.grabbing {
@@ -686,9 +816,7 @@ canvas.board {
     border-top: 0;
 }
 .modal .deck-list .suit-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.7px;
+    font-size: 12px;
     color: var(--muted);
     display: flex;
     align-items: center;
@@ -750,24 +878,203 @@ canvas.board {
     justify-content: flex-end;
     gap: 8px;
 }
+.modal-format .footer {
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    /* Extra bottom room for the share status that floats below the
+       share row — sits inside the footer's padding so it never wraps
+       the row even when the message is long. */
+    padding-bottom: 18px;
+    position: relative;
+}
+.modal-format .format-share {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+}
+.modal-format .format-deck-code {
+    width: 180px;
+    min-width: 0;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+.modal-format .format-share-status {
+    /* Absolutely positioned below the share row so the (potentially
+       long) status text doesn't push the row to wrap or shrink the
+       Cancel/Clear/Save group beside it. */
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    pointer-events: none;
+}
+.modal-format .format-share-status.error {
+    color: var(--danger);
+}
+.modal-format .format-share-status.ok {
+    color: var(--ok);
+}
+.modal-format .format-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Fast-format deck-picker modal */
+.modal-format {
+    min-width: 720px;
+    max-width: 820px;
+    max-height: 92vh;
+}
+.modal-format .format-section {
+    margin-bottom: 16px;
+}
+.modal-format .format-section-title {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+}
+.modal-format .format-section-title code {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 3px;
+    font-size: 11px;
+    color: var(--text);
+}
+.modal-format .format-premades {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+/* Visual card picker — same suit-grouped layout as the search-deck
+   modal, but each card is a toggle: dimmed by default, full opacity
+   when picked, with an accent ring as the chosen indicator. */
+.format-card-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 6px;
+}
+.format-card-picker .suit-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+.format-card-picker .suit-group:first-child {
+    padding-top: 0;
+    border-top: 0;
+}
+.format-card-picker .suit-label {
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.format-card-picker .suit-label .sym {
+    font-size: 16px;
+    line-height: 1;
+}
+.format-card-picker .suit-label.red {
+    color: var(--red);
+}
+.format-card-picker .suit-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.format-card-picker .suit-grid {
+    display: grid;
+    grid-template-columns: repeat(9, 54px) auto repeat(4, 54px);
+    gap: 6px;
+    justify-content: start;
+    align-items: center;
+}
+.format-card-picker .suit-grid .rank-divider {
+    grid-column: 10;
+    margin: 0;
+    width: 1px;
+    height: 64px;
+    align-self: center;
+    background: linear-gradient(
+        to bottom,
+        transparent 0%,
+        var(--border) 30%,
+        var(--border) 70%,
+        transparent 100%
+    );
+}
+.format-card-picker .card {
+    cursor: pointer;
+    opacity: 0.45;
+    transition:
+        opacity 0.1s,
+        box-shadow 0.1s,
+        transform 0.1s;
+}
+.format-card-picker .card:hover {
+    opacity: 0.85;
+    transform: translateY(-2px);
+}
+.format-card-picker .card.picked {
+    opacity: 1;
+    box-shadow:
+        0 0 0 2px var(--accent),
+        0 3px 6px rgba(0, 0, 0, 0.45);
+}
+.modal-format .format-card-count {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.55;
+}
+.modal-format .format-card-count.error {
+    color: var(--danger);
+}
 
 .log {
     background: var(--panel);
     border-top: 1px solid var(--border);
-    padding: 6px 14px;
+    padding: 4px 14px;
     font-family: ui-monospace, Menlo, monospace;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--muted);
     /* Fixed height — must NOT grow when new entries are added,
        or the table above resizes and percentage-positioned cards
        visually shift between the drop and the render. */
-    height: 60px;
+    height: 40px;
     overflow-y: auto;
     flex-shrink: 0;
     box-sizing: border-box;
+    line-height: 1.55;
 }
 .log .entry {
-    padding: 1px 0;
+    padding: 0;
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+}
+.log .entry .ts {
+    color: var(--muted);
+    opacity: 0.55;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+.log .entry .msg {
+    color: var(--muted);
+    flex: 1;
+    min-width: 0;
 }
 
 .side-label {

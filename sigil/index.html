@@ -4,7 +4,7 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <title>Sigil (Version 0 Playtest)</title>
-        <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+        <script src="peerjs.min.js"></script>
         <link rel="stylesheet" href="styles.css" />
     </head>
     <body>
@@ -15,13 +15,19 @@
             <button id="btnRollD20" class="secondary" type="button">
                 Roll d20
             </button>
-            <h1>Sigil (Version 0 Playtest)</h1>
+            <span class="header-sep" aria-hidden="true"
+                >✦ <span class="header-version">0.1</span></span
+            >
 
+            <select id="formatSelect" class="format-select">
+                <option value="full">Format: Full</option>
+                <option value="fast">Format: Fast</option>
+            </select>
             <button id="btnHost">Host Game</button>
             <input
                 type="text"
                 id="joinId"
-                placeholder="Enter host ID to join…"
+                placeholder="Enter lobby code to join…"
             />
             <button id="btnJoin">Join Game</button>
             <span class="status" id="status">Not connected</span>
@@ -40,6 +46,13 @@
                 </div>
                 <div class="zones-side">
                     <div class="side-label">Opponent</div>
+                    <div class="zone">
+                        <div class="pile" id="oppSetPile">
+                            <div class="stacked"></div>
+                            <div class="card-host"></div>
+                            <div class="count-badge" id="oppSetCount">0</div>
+                        </div>
+                    </div>
                     <div class="zone">
                         <div class="counter readonly">
                             <span class="cnum" id="oppDeckCounter">0</span>
@@ -76,6 +89,13 @@
                 </div>
                 <div class="zones-side">
                     <div class="side-label you">You</div>
+                    <div class="zone">
+                        <div class="pile" id="selfSetPile">
+                            <div class="stacked"></div>
+                            <div class="card-host"></div>
+                            <div class="count-badge" id="selfSetCount">0</div>
+                        </div>
+                    </div>
                     <div class="zone">
                         <div class="counter" id="selfDeckCounterUI">
                             <button class="cb" data-act="dec" type="button">
@@ -116,6 +136,74 @@
                 <div class="deck-list" id="modalList"></div>
                 <div class="footer">
                     <button class="secondary" id="modalClose">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-bg" id="formatModal">
+            <div class="modal modal-format">
+                <h3>Fast format</h3>
+                <div class="format-section">
+                    <div class="format-section-title">
+                        Choose a premade deck
+                    </div>
+                    <div class="format-premades" id="formatPremades"></div>
+                </div>
+                <div class="format-section">
+                    <div class="format-section-title">
+                        Or build your own — click cards to add or remove them.
+                        Hover to see what a card does.
+                    </div>
+                    <div class="format-card-picker" id="formatCardPicker"></div>
+                    <div class="format-card-count" id="formatCardCount">
+                        0 / 25 cards
+                    </div>
+                </div>
+                <div class="footer">
+                    <div class="format-share">
+                        <button
+                            class="secondary"
+                            id="formatExport"
+                            type="button"
+                        >
+                            Export
+                        </button>
+                        <input
+                            type="text"
+                            id="formatDeckCode"
+                            class="format-deck-code"
+                            placeholder="Deck code…"
+                            spellcheck="false"
+                        />
+                        <button
+                            class="secondary"
+                            id="formatImport"
+                            type="button"
+                        >
+                            Import deck
+                        </button>
+                        <span
+                            class="format-share-status"
+                            id="formatShareStatus"
+                        ></span>
+                    </div>
+                    <div class="format-actions">
+                        <button
+                            class="secondary"
+                            id="formatCancel"
+                            type="button"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            class="secondary"
+                            id="formatClearPick"
+                            type="button"
+                        >
+                            Clear selected
+                        </button>
+                        <button id="formatApply" type="button">Save</button>
+                    </div>
                 </div>
             </div>
         </div>
