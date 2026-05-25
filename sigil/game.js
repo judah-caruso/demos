@@ -2503,6 +2503,11 @@ function drawManyMoveRestToBottom() {
 
 document.getElementById("btnHost").onclick = host;
 document.getElementById("btnJoin").onclick = join;
+document.getElementById("btnRollD20").onclick = () => {
+  const roll = 1 + Math.floor(Math.random() * 20);
+  log("Rolled d20: " + roll);
+  notifyOpp("rolled a d20: " + roll);
+};
 document.getElementById("modalClose").onclick = closeModal;
 document.getElementById("modal").addEventListener("click", (e) => {
   if (e.target.id === "modal") closeModal();
