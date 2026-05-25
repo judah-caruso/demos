@@ -9,14 +9,18 @@
     </head>
     <body>
         <header>
+            <button id="btnGuide" class="secondary" type="button">
+                Player Guide
+            </button>
             <h1>Sigil (Version 0 Playtest)</h1>
-            <button id="btnHost">Host game</button>
+
+            <button id="btnHost">Host Game</button>
             <input
                 type="text"
                 id="joinId"
                 placeholder="Enter host ID to join…"
             />
-            <button id="btnJoin">Join</button>
+            <button id="btnJoin">Join Game</button>
             <span class="status" id="status">Not connected</span>
         </header>
 
@@ -24,7 +28,9 @@
             <!-- Opponent half (top) -->
             <div class="half opp">
                 <div class="hand-row">
-                    <div class="hand opp" id="oppHand"></div>
+                    <div class="hand opp" id="oppHand">
+                        <div class="hand-pip" id="oppHandCount">0</div>
+                    </div>
                 </div>
                 <div class="board-container">
                     <canvas class="board opp-board" id="oppBoard"></canvas>
@@ -61,7 +67,9 @@
                     <canvas class="board" id="selfBoard"></canvas>
                 </div>
                 <div class="hand-row">
-                    <div class="hand self" id="selfHand"></div>
+                    <div class="hand self" id="selfHand">
+                        <div class="hand-pip" id="selfHandCount">0</div>
+                    </div>
                 </div>
                 <div class="zones-side">
                     <div class="side-label you">You</div>
@@ -105,6 +113,57 @@
                 <div class="deck-list" id="modalList"></div>
                 <div class="footer">
                     <button class="secondary" id="modalClose">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="modal-bg" id="guideModal">
+            <div class="modal modal-guide">
+                <div class="guide-header">
+                    <h3>Guide</h3>
+                    <div class="guide-controls">
+                        <button
+                            class="secondary"
+                            id="guideZoomOut"
+                            type="button"
+                            title="Zoom out"
+                        >
+                            −
+                        </button>
+                        <span class="guide-zoom" id="guideZoomLabel">100%</span>
+                        <button
+                            class="secondary"
+                            id="guideZoomIn"
+                            type="button"
+                            title="Zoom in"
+                        >
+                            +
+                        </button>
+                        <button
+                            class="secondary"
+                            id="guideZoomFit"
+                            type="button"
+                            title="Fit to window"
+                        >
+                            Fit
+                        </button>
+                        <button
+                            class="secondary"
+                            id="guideOpenTab"
+                            type="button"
+                            title="Open the image in a new tab"
+                        >
+                            Open in tab
+                        </button>
+                        <button class="secondary" id="guideClose" type="button">
+                            Close
+                        </button>
+                    </div>
+                </div>
+                <div class="guide-image-container" id="guideImageContainer">
+                    <div class="guide-image-wrap">
+                        <img id="guideImage" src="guide.png" alt="Guide" />
+                    </div>
                 </div>
             </div>
         </div>
