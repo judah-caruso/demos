@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Sigil (Version 0 Playtest)</title>
+        <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+        <link rel="stylesheet" href="/styles.css" />
+    </head>
+    <body>
+        <header>
+            <h1>Sigil (Version 0 Playtest)</h1>
+            <button id="btnHost">Host game</button>
+            <input
+                type="text"
+                id="joinId"
+                placeholder="Enter host ID to join…"
+            />
+            <button id="btnJoin">Join</button>
+            <span class="status" id="status">Not connected</span>
+        </header>
+
+        <div class="table">
+            <!-- Opponent half (top) -->
+            <div class="half opp">
+                <div class="hand-row">
+                    <div class="hand opp" id="oppHand"></div>
+                </div>
+                <div class="board-container">
+                    <canvas class="board opp-board" id="oppBoard"></canvas>
+                </div>
+                <div class="zones-side">
+                    <div class="side-label">Opponent</div>
+                    <div class="zone">
+                        <div class="counter readonly">
+                            <span class="cnum" id="oppDeckCounter">0</span>
+                        </div>
+                        <div class="pile" id="oppDeckPile">
+                            <div class="stacked"></div>
+                            <div class="card-host"></div>
+                            <div class="count-badge" id="oppDeckCount">0</div>
+                        </div>
+                    </div>
+                    <div class="zone">
+                        <div class="pile" id="oppDiscardPile">
+                            <div class="stacked"></div>
+                            <div class="card-host"></div>
+                            <div class="count-badge" id="oppDiscardCount">
+                                0
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="midline"></div>
+
+            <!-- Self half (bottom) -->
+            <div class="half self">
+                <div class="board-container">
+                    <canvas class="board" id="selfBoard"></canvas>
+                </div>
+                <div class="hand-row">
+                    <div class="hand self" id="selfHand"></div>
+                </div>
+                <div class="zones-side">
+                    <div class="side-label you">You</div>
+                    <div class="zone">
+                        <div class="counter" id="selfDeckCounterUI">
+                            <button class="cb" data-act="dec" type="button">
+                                −
+                            </button>
+                            <span class="cnum" id="selfDeckCounter">20</span>
+                            <button class="cb" data-act="inc" type="button">
+                                +
+                            </button>
+                        </div>
+                        <div class="pile" id="selfDeckPile">
+                            <div class="stacked"></div>
+                            <div class="card-host"></div>
+                            <div class="count-badge" id="selfDeckCount">0</div>
+                        </div>
+                    </div>
+                    <div class="zone">
+                        <div class="pile" id="selfDiscardPile">
+                            <div class="stacked"></div>
+                            <div class="card-host"></div>
+                            <div class="count-badge" id="selfDiscardCount">
+                                0
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="log" id="log"></div>
+
+        <div class="ctx-menu" id="ctxMenu"></div>
+        <div class="card-tooltip" id="cardTooltip"></div>
+
+        <div class="modal-bg" id="modal">
+            <div class="modal">
+                <h3 id="modalTitle">Search deck</h3>
+                <div class="deck-list" id="modalList"></div>
+                <div class="footer">
+                    <button class="secondary" id="modalClose">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <script src="/game.js" defer></script>
+    </body>
+</html>
