@@ -178,6 +178,7 @@ function saveLocalState() {
         version: STATE_VERSION,
         deck: self.deck,
         hand: self.hand,
+        tabled: self.tabled,
         play: self.play,
         discard: self.discard,
         set: self.set,
@@ -187,6 +188,7 @@ function saveLocalState() {
         fastDeckText:
           typeof lastFastDeckText === "string" ? lastFastDeckText : "",
         wins: typeof selfWins === "number" ? selfWins : 0,
+        turn: currentTurn,
       }),
     );
   } catch (e) {
@@ -609,6 +611,7 @@ function applyFastDeck(cardSpecs, label, sourceText) {
   shuffleInPlace(deck);
   self.deck = deck;
   self.hand = [];
+  self.tabled = [];
   self.discard = [];
   self.set = [];
   self.play = [];
@@ -626,6 +629,7 @@ function selectFullFormat() {
   self.deck = freshDeck();
   shuffleInPlace(self.deck);
   self.hand = [];
+  self.tabled = [];
   self.discard = [];
   self.set = [];
   self.play = [];
@@ -661,6 +665,11 @@ function isRed(c) {
 const self = {
   deck: [],
   hand: [],
+  // Public "tabled" zone next to the hand — cards here are visible to
+  // both players, can be rotated (click) or flipped (right-click), and
+  // travel with the standard moveCard/drag system. Each card carries
+  // its own `rot` (0/90/180/270) and `faceDown` flag.
+  tabled: [],
   discard: [],
   set: [], // "set aside" pile — cards picked from the deck via the
   // side section above the deck counter. Visible to both players.
@@ -674,6 +683,7 @@ const opp = {
   // array sent by the opp via broadcastState). When set, we render the
   // opp's hand face-up instead of as N card backs.
   hand: null,
+  tabled: [],
   discard: [],
   set: [],
   play: [],
@@ -682,9 +692,21 @@ const opp = {
 // When true, broadcastState sends our full hand to the opp so they can
 // see what we're holding. Toggled via the hand-card right-click menu.
 let selfHandRevealed = false;
+// Whose turn is it, from this player's perspective. "self" highlights
+// the bottom half; "opp" highlights the top half. Persisted in
+// localStorage and synced via a turnChange peer message.
+let currentTurn =
+  _savedForBoot &&
+  (_savedForBoot.turn === "self" || _savedForBoot.turn === "opp")
+    ? _savedForBoot.turn
+    : "self";
 
 let peer = null;
 let conn = null;
+// True when the local player clicked Host (rather than Join). Used to
+// pick a canonical "first turn" assignment when a new lobby starts —
+// the host gets "self", joiner gets "opp".
+let isHost = false;
 let drag = null;
 let suppressNextClick = false;
 let suppressNextClickTimer = null;
@@ -728,6 +750,13 @@ window.addEventListener("keydown", (e) => {
       cKeyDown = true;
       drawSelf();
     }
+  }
+  // Spacebar → end turn (same effect as clicking the End Turn button).
+  // preventDefault stops the page from scrolling; the repeat guard
+  // keeps a held key from flipping the turn back and forth.
+  if ((e.key === " " || e.code === "Space") && !e.repeat) {
+    e.preventDefault();
+    endTurn();
   }
   // Chat hotkeys: Enter opens the chat; "/" opens it and seeds the
   // textbox with a slash so the player can type a command immediately.
@@ -1481,6 +1510,7 @@ async function host() {
   // Clicking Host starts a new game — wipe our board and signal the
   // opp (when they connect) to wipe theirs too. A fresh lobby also
   // zeroes the win counters on both sides.
+  isHost = true;
   selfWins = 0;
   oppWins = 0;
   newDeck();
@@ -1516,6 +1546,7 @@ async function join() {
   // Manual join → wipe local board + signal opp. Auto-rejoin after a
   // refresh skips this so the saved board comes back intact. A fresh
   // join also zeroes the win counters on both sides.
+  isHost = false;
   if (!autoJoining) {
     selfWins = 0;
     oppWins = 0;
@@ -1565,7 +1596,16 @@ function wireConn() {
     // wipe their board too so both sides start at zero.
     if (pendingReset) {
       pendingReset = false;
+      // Fresh lobby — both peers default to "their own" turn locally,
+      // and the host immediately tells the joiner that it's the host's
+      // turn (which is "opp" from the joiner's perspective).
+      currentTurn = "self";
+      applyTurnVisual();
+      saveLocalState();
       conn.send({ type: "reset" });
+      if (isHost) {
+        conn.send({ type: "turnChange", turn: "opp" });
+      }
     }
     // Tell the opp our accent so they render our card backs in our
     // color. Both sides fire this on open, so we exchange creds with
@@ -1583,13 +1623,26 @@ function wireConn() {
       receiveChatMessage(data.text, data.sender, data.variant);
     else if (data.type === "winRecorded") receiveWinRecorded(data.wins);
     else if (data.type === "formatChange") receiveFormatChange(data.format);
-    else if (data.type === "reset") {
+    else if (data.type === "turnChange") receiveTurnChange(data.turn);
+    else if (data.type === "newgame") {
+      // Board-only reset — keep wins, turn, palette, format, chat.
+      log("Opponent started a new game — board reset");
+      resetBoardKeepingFormat();
+      saveLocalState();
+    } else if (data.type === "reset") {
       // Opp clicked Host/Join or ran /reset — wipe our board and wins
       // so both sides' scoreboards stay in sync. Format/palette/chat
-      // are preserved.
+      // are preserved. If the message includes a `turn` field (as
+      // /reset does), apply it so the resetter takes the first turn;
+      // connection-time resets omit it and let the host's separate
+      // turnChange be the source of truth.
       log("Opponent started a new game — board reset");
       selfWins = 0;
       oppWins = 0;
+      if (data.turn === "self" || data.turn === "opp") {
+        currentTurn = data.turn;
+        applyTurnVisual();
+      }
       resetBoardKeepingFormat();
       saveLocalState();
     } else if (data.type === "hello") {
@@ -1634,6 +1687,7 @@ function receiveOppState(data) {
   opp.deckCount = data.deckCount;
   opp.handCount = data.handCount;
   opp.hand = Array.isArray(data.hand) ? data.hand : null;
+  opp.tabled = Array.isArray(data.tabled) ? data.tabled : [];
   opp.discard = data.discard || [];
   opp.set = data.set || [];
   opp.play = newPlay;
@@ -1814,6 +1868,13 @@ function broadcastState() {
     return out;
   };
   const playForOpp = self.play.map(redactCard);
+  // Tabled cards: face-down ones only send id + rot + faceDown so the
+  // opp can't peek; face-up cards send their full data.
+  const redactTabled = (c) =>
+    c.faceDown
+      ? { id: c.id, rot: c.rot || 0, faceDown: true }
+      : c;
+  const tabledForOpp = self.tabled.map(redactTabled);
   conn.send({
     type: "state",
     deckCount: self.deck.length,
@@ -1822,6 +1883,7 @@ function broadcastState() {
     // cards so the opp can render them face-up. Otherwise omit, and
     // the opp falls back to N face-down backs based on handCount.
     hand: selfHandRevealed ? self.hand : null,
+    tabled: tabledForOpp,
     discard: self.discard,
     set: self.set,
     play: playForOpp,
@@ -1840,6 +1902,7 @@ function newDeck() {
   self.deck = freshDeck();
   shuffleInPlace(self.deck);
   self.hand = [];
+  self.tabled = [];
   self.discard = [];
   self.set = [];
   self.play = [];
@@ -1993,6 +2056,10 @@ function moveCard(source, target, opts) {
       attachedCards = card.attached.slice();
       delete card.attached;
     }
+  } else if (source.type === "tabled") {
+    const i = self.tabled.findIndex((c) => c.id === source.cardId);
+    if (i < 0) return;
+    [card] = self.tabled.splice(i, 1);
   }
   if (!card) return;
 
@@ -2035,6 +2102,10 @@ function moveCard(source, target, opts) {
       a.y = opts.y;
       self.play.push(a);
     }
+  } else if (target.type === "tabled") {
+    // Default to face-up + unrotated; the user toggles those after.
+    for (const a of attachedCards) self.tabled.push(a);
+    self.tabled.push(card);
   }
 
   const label =
@@ -2068,6 +2139,14 @@ function describeAction(s, t) {
     "setTop-discard": "Discarded from set:",
     "setTop-deckTop": "Returned to top of deck from set:",
     "setTop-deckBottom": "Sent to bottom of deck from set:",
+    "hand-tabled": "Tabled:",
+    "play-tabled": "Tabled from play:",
+    "deckTop-tabled": "Tabled from deck:",
+    "tabled-hand": "Returned tabled card to hand:",
+    "tabled-discard": "Discarded tabled card:",
+    "tabled-play": "Played tabled card:",
+    "tabled-deckTop": "Tabled → top of deck:",
+    "tabled-deckBottom": "Tabled → bottom of deck:",
   };
   return m[`${s}-${t}`] || "Moved:";
 }
@@ -2093,6 +2172,14 @@ function describeActionOpp(s, t) {
     "setTop-deckTop": "moved a card from their set pile to their deck",
     "setTop-deckBottom":
       "sent a card from their set pile to the bottom of their deck",
+    "hand-tabled": "tabled a card",
+    "play-tabled": "tabled a card from play",
+    "deckTop-tabled": "tabled a card from their deck",
+    "tabled-hand": "returned a tabled card to their hand",
+    "tabled-discard": "discarded a tabled card",
+    "tabled-play": "played a tabled card",
+    "tabled-deckTop": "moved a tabled card to top of deck",
+    "tabled-deckBottom": "moved a tabled card to bottom of deck",
   };
   return m[`${s}-${t}`] || "moved a card";
 }
@@ -2156,7 +2243,7 @@ function faceDownCardEl(opts) {
 function findDropZone(under) {
   if (!under) return null;
   return under.closest(
-    "#selfBoard, #selfDeckPile, #selfDiscardPile, #selfSetPile, #selfHand, .half.self .hand-row",
+    "#selfBoard, #selfDeckPile, #selfDiscardPile, #selfSetPile, #selfTabled, #selfHand, .half.self .hand-row",
   );
 }
 
@@ -2295,6 +2382,9 @@ function performGhostDrop(targetEl) {
   } else if (targetEl.id === "selfSetPile") {
     if (src.type === "setTop") return;
     moveCard(src, { type: "set" });
+  } else if (targetEl.id === "selfTabled") {
+    if (src.type === "tabled") return;
+    moveCard(src, { type: "tabled" });
   } else {
     if (src.type === "hand") return;
     moveCard(src, { type: "hand" });
@@ -2877,7 +2967,82 @@ function renderSelf() {
     hand.appendChild(wrap);
   }
 
+  renderSelfTabled();
   drawSelf();
+}
+
+// Render the public "tabled" row next to the hand. Each card is
+// draggable, click-to-rotate, and right-click for Flip / Send-to-bottom.
+function renderSelfTabled() {
+  const zone = document.getElementById("selfTabled");
+  zone.querySelectorAll(".card-wrap").forEach((el) => el.remove());
+  document.getElementById("selfTabledCount").textContent = self.tabled.length;
+  for (const c of self.tabled) {
+    const wrap = document.createElement("div");
+    wrap.className = "card-wrap";
+    const rot = ((c.rot || 0) % 360 + 360) % 360;
+    const inner = c.faceDown ? faceDownCardEl() : cardEl(c);
+    if (rot !== 0) inner.style.transform = `rotate(${rot}deg)`;
+    // 90/270° rotation makes the card taller than wide; widen the
+    // wrap slot so neighbours don't overlap.
+    if (rot % 180 !== 0) wrap.classList.add("rotated");
+    wrap.appendChild(inner);
+    attachGhostDrag(wrap, () => ({ type: "tabled", cardId: c.id }));
+    wireTabledCardInteractions(wrap, c);
+    if (!c.faceDown) attachCardTooltip(wrap, c);
+    zone.appendChild(wrap);
+  }
+}
+
+function wireTabledCardInteractions(wrap, c) {
+  wrap.addEventListener("click", (e) => {
+    // Drags arm a click-suppression flag (set by armClickSuppression) so
+    // dropping a card doesn't accidentally rotate it.
+    if (suppressNextClick) return;
+    if (e.target.closest("button, input, .ctx-menu")) return;
+    rotateTabledCard(c.id);
+  });
+  wrap.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openTabledCardContext(e.clientX, e.clientY, c, wrap);
+  });
+}
+
+function rotateTabledCard(id) {
+  const c = self.tabled.find((x) => x.id === id);
+  if (!c) return;
+  c.rot = ((c.rot || 0) + 90) % 360;
+  renderSelfTabled();
+  saveLocalState();
+  broadcastState();
+}
+
+function flipTabledCard(id) {
+  const c = self.tabled.find((x) => x.id === id);
+  if (!c) return;
+  c.faceDown = !c.faceDown;
+  renderSelfTabled();
+  saveLocalState();
+  broadcastState();
+}
+
+function openTabledCardContext(x, y, card, wrap) {
+  closeCtx();
+  ctxOpenWrap = wrap;
+  wrap.classList.add("menu-open");
+  buildCtx([
+    { header: card.faceDown ? "Tabled card (face-down)" : cardLabel(card) },
+    {
+      label: card.faceDown ? "Flip face-up" : "Flip face-down",
+      onClick: () => flipTabledCard(card.id),
+    },
+    {
+      label: "Send to bottom of deck",
+      onClick: () =>
+        moveCard({ type: "tabled", cardId: card.id }, { type: "deckBottom" }),
+    },
+  ]);
+  positionCtx(x, y);
 }
 
 function renderOpp() {
@@ -2925,7 +3090,29 @@ function renderOpp() {
     }
     oh.appendChild(w);
   }
+  renderOppTabled();
   drawOpp();
+}
+
+// Mirror of renderSelfTabled — read-only display of the opp's tabled
+// cards. No drag, no click-to-rotate, no context menu; tooltips on
+// face-up cards so the player can hover-inspect.
+function renderOppTabled() {
+  const zone = document.getElementById("oppTabled");
+  if (!zone) return;
+  zone.querySelectorAll(".card-wrap").forEach((el) => el.remove());
+  document.getElementById("oppTabledCount").textContent = opp.tabled.length;
+  for (const c of opp.tabled) {
+    const wrap = document.createElement("div");
+    wrap.className = "card-wrap";
+    const rot = ((c.rot || 0) % 360 + 360) % 360;
+    const inner = c.faceDown ? faceDownCardEl() : cardEl(c);
+    if (rot !== 0) inner.style.transform = `rotate(${rot}deg)`;
+    if (rot % 180 !== 0) wrap.classList.add("rotated");
+    wrap.appendChild(inner);
+    if (!c.faceDown) attachCardTooltip(wrap, c);
+    zone.appendChild(wrap);
+  }
 }
 
 // ============================================================
@@ -3659,6 +3846,48 @@ function rollD20() {
   }
 }
 // document.getElementById("btnRollD20").onclick = rollD20;
+
+// End-turn: flip the active side locally and tell the opp. The wire
+// value is from the receiver's perspective, so we send the inverse of
+// our own new turn (we just ended → it's now "opp" for us, which is
+// "self" for them). Exposed as a function so the button click and the
+// spacebar shortcut can share one path. Bails when it's not your turn
+// — you can only end your OWN turn, never grab the opp's.
+function endTurn() {
+  if (currentTurn !== "self") return;
+  currentTurn = "opp";
+  applyTurnVisual();
+  saveLocalState();
+  if (conn && conn.open) {
+    conn.send({ type: "turnChange", turn: "self" });
+  }
+}
+document.getElementById("btnEndTurn").onclick = endTurn;
+
+function applyTurnVisual() {
+  const selfHalf = document.querySelector(".half.self");
+  const oppHalf = document.querySelector(".half.opp");
+  if (selfHalf)
+    selfHalf.classList.toggle("active-turn", currentTurn === "self");
+  if (oppHalf) oppHalf.classList.toggle("active-turn", currentTurn === "opp");
+  // End Turn button is only clickable on your own turn — disable it
+  // (and the spacebar shortcut, via the endTurn guard below) the rest
+  // of the time so you can't accidentally hand off the opp's turn.
+  const btn = document.getElementById("btnEndTurn");
+  if (btn) btn.disabled = currentTurn !== "self";
+}
+
+function receiveTurnChange(turn) {
+  if (turn !== "self" && turn !== "opp") return;
+  currentTurn = turn;
+  applyTurnVisual();
+  saveLocalState();
+}
+
+// Initial paint — the saved state may have started us on opp's turn,
+// and the .half elements exist before this point in script load.
+applyTurnVisual();
+
 document.getElementById("modalClose").onclick = closeModal;
 document.getElementById("modal").addEventListener("click", (e) => {
   if (e.target.id === "modal") closeModal();
@@ -4012,8 +4241,13 @@ function setChatUnread(n) {
 function openChat() {
   chatEl.classList.remove("collapsed");
   setChatUnread(0);
-  // Defer focus until the body has been laid out.
-  setTimeout(() => chatInput.focus(), 0);
+  // Defer focus + scroll until the panel has been laid out — while
+  // collapsed the messages list has no height, so scrollHeight reads
+  // as 0 and a synchronous scrollTop assignment is a no-op.
+  setTimeout(() => {
+    chatInput.focus();
+    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  }, 0);
 }
 
 function closeChat() {
@@ -4103,6 +4337,12 @@ function handleChatCommand(line) {
     case "/reset":
       cmdReset();
       break;
+    case "/newgame":
+      cmdNewGame();
+      break;
+    case "/myturn":
+      cmdMyTurn();
+      break;
     case "/format":
       cmdFormat(arg);
       break;
@@ -4123,7 +4363,9 @@ function cmdHelp() {
     "/roll — roll a d20 (visible to both players)",
     "/win — record a win for this lobby",
     "/stats — show this lobby's score",
-    "/reset — reset both boards (keep scores)",
+    "/reset — reset both boards and wins",
+    "/newgame — reset both boards (keep wins/turn)",
+    "/myturn — claim the current turn",
     "/format full — switch lobby to Full format",
     "/format fast — switch lobby to Fast format",
     "/clear — clear your local chat history",
@@ -4169,11 +4411,38 @@ function cmdReset() {
   selfWins = 0;
   oppWins = 0;
   selfHandRevealed = false;
+  currentTurn = "self";
+  applyTurnVisual();
   resetBoardKeepingFormat();
   saveLocalState();
-  appendChatMessage("system", "Board reset");
+  appendChatMessage("system", "Lobby state has been reset");
   if (conn && conn.open) {
-    conn.send({ type: "reset" });
+    // Receiver flips to "opp" because the resetter (us) takes the
+    // first turn — same convention as the End Turn button uses.
+    conn.send({ type: "reset", turn: "opp" });
+  }
+}
+
+// Reset only the board state — wins, turn, palette, format, chat, and
+// hand-reveal flag are all preserved. Both sides reshuffle their deck.
+function cmdNewGame() {
+  resetBoardKeepingFormat();
+  saveLocalState();
+  appendChatMessage("system", "New game — boards reset");
+  if (conn && conn.open) {
+    conn.send({ type: "newgame" });
+  }
+}
+
+// Claim the current turn. Sender becomes "self" turn locally, and the
+// receiver flips to "opp" via the existing turnChange protocol.
+function cmdMyTurn() {
+  currentTurn = "self";
+  applyTurnVisual();
+  saveLocalState();
+  appendChatMessage("system", "Made it their turn");
+  if (conn && conn.open) {
+    conn.send({ type: "turnChange", turn: "opp" });
   }
 }
 
@@ -4427,7 +4696,8 @@ function tryRestoreSavedBoard() {
       (saved.hand ? saved.hand.length : 0) +
       (saved.play ? saved.play.length : 0) +
       (saved.discard ? saved.discard.length : 0) +
-      (saved.set ? saved.set.length : 0) ===
+      (saved.set ? saved.set.length : 0) +
+      (saved.tabled ? saved.tabled.length : 0) ===
     0
   ) {
     // Nothing to restore — treat as a fresh boot so newDeck() runs.
@@ -4435,6 +4705,7 @@ function tryRestoreSavedBoard() {
   }
   self.deck = saved.deck;
   self.hand = saved.hand || [];
+  self.tabled = saved.tabled || [];
   self.play = saved.play || [];
   self.discard = saved.discard || [];
   self.set = saved.set || [];
@@ -4449,6 +4720,7 @@ function tryRestoreSavedBoard() {
   };
   bump(self.deck);
   bump(self.hand);
+  bump(self.tabled);
   bump(self.play);
   bump(self.discard);
   bump(self.set);

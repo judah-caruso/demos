@@ -39,6 +39,13 @@
                         </dl>
                     </section>
                     <section class="controls-section">
+                        <h3>Turn</h3>
+                        <dl>
+                            <dt><kbd>Space</kbd></dt>
+                            <dd>End turn</dd>
+                        </dl>
+                    </section>
+                    <section class="controls-section">
                         <h3>Chat</h3>
                         <dl>
                             <dt><kbd>Enter</kbd></dt>
@@ -54,16 +61,6 @@
                         <dl>
                             <dt><code>/help</code></dt>
                             <dd>Show command list</dd>
-                            <dt><code>/roll</code></dt>
-                            <dd>Roll a d20</dd>
-                            <dt><code>/win</code></dt>
-                            <dd>Record a win</dd>
-                            <dt><code>/stats</code></dt>
-                            <dd>Show score</dd>
-                            <dt><code>/reset</code></dt>
-                            <dd>Reset board &amp; wins</dd>
-                            <dt><code>/format</code> full | fast</dt>
-                            <dd>Change format</dd>
                             <dt><code>/clear</code></dt>
                             <dd>Clear chat history</dd>
                         </dl>
@@ -119,6 +116,9 @@
                     <div class="hand opp" id="oppHand">
                         <div class="hand-pip" id="oppHandCount">0</div>
                     </div>
+                    <div class="tabled opp" id="oppTabled">
+                        <div class="hand-pip" id="oppTabledCount">0</div>
+                    </div>
                 </div>
                 <div class="board-container">
                     <canvas class="board opp-board" id="oppBoard"></canvas>
@@ -162,6 +162,9 @@
                     <canvas class="board" id="selfBoard"></canvas>
                 </div>
                 <div class="hand-row">
+                    <div class="tabled self" id="selfTabled">
+                        <div class="hand-pip" id="selfTabledCount">0</div>
+                    </div>
                     <div class="hand self" id="selfHand">
                         <div class="hand-pip" id="selfHandCount">0</div>
                     </div>
@@ -202,6 +205,12 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div class="end-turn-fab">
+            <button id="btnEndTurn" class="secondary" type="button">
+                End Turn
+            </button>
         </div>
 
         <div class="log" id="log"></div>

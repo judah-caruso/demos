@@ -200,6 +200,61 @@ input[type="text"]::placeholder {
     min-height: 0;
     position: relative; /* anchor for the absolutely-positioned zones-side */
 }
+/* Active-turn indicator — soft accent-tinted glow that hugs the inner
+   edge of the active player's half. Self uses --accent; opp uses
+   --opp-accent so each side reads in their own color. The glow sits
+   on a ::before pseudo so it doesn't interfere with hit-testing on
+   the half's interactive contents. */
+.half::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 0 transparent;
+    transition: box-shadow 180ms ease-out;
+    z-index: 5;
+}
+.half.self.active-turn::before {
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+.half.opp.active-turn::before {
+    box-shadow: inset 0 0 0 1px var(--opp-accent, var(--accent));
+}
+/* End-turn floating button — wrapper handles positioning so the
+   button's own :active transform doesn't fight the centering math.
+   `left` is computed to match the horizontal center of the opp deck
+   pile (the zones-side right-edge math minus 8px gap minus 14px
+   padding minus half the 70px pile = 57px), so the button sits in a
+   visual column with the deck. Vertically centered along the midline.
+   z-index sits above the active-turn outline (z=5) but below chat /
+   modals (60+). Opaque panel background prevents the inset outline
+   from "cutting through" the transparent .secondary button. */
+.end-turn-fab {
+    position: fixed;
+    left: calc(50% - min(40%, calc(50% - 120px)) - 57px);
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 55;
+    isolation: isolate;
+    background: var(--panel);
+    border-radius: 4px;
+}
+/* Kill the global button:active translate for this button — the user
+   wants no movement on click. */
+.end-turn-fab button:active {
+    transform: none;
+}
+/* Disabled (it's not your turn) — dim, no pointer, keep dimensions so
+   the layout doesn't shift. */
+.end-turn-fab button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.end-turn-fab button:disabled:hover {
+    background: transparent;
+    border-color: var(--border);
+}
 .midline {
     height: 1px;
     background: var(--border);
@@ -276,16 +331,20 @@ canvas.board {
    anchored to the half (see below), so this row's height doesn't shrink
    the play area. */
 .hand-row {
+    /* Two equal-width zones (each ~40% of viewport) centered as a
+       group. align-items: stretch keeps the zones matched in height
+       so they always look like a pair. */
     display: flex;
     justify-content: center;
-    align-items: center;
+    align-items: stretch;
     flex-shrink: 0;
-    padding: 6px 0;
+    gap: 8px;
 }
 .hand {
-    /* 80% of window, but clamped so ~120px of room is reserved on each
-       side for the zones-side column. */
-    width: min(80%, calc(100% - 240px));
+    /* Half of the 80% paired row — same width and height as the
+       tabled zone next to it. */
+    width: 40%;
+    min-width: 0;
     min-height: 118px;
     display: flex;
     align-items: center;
@@ -295,6 +354,58 @@ canvas.board {
     flex-wrap: wrap;
     background: rgba(0, 0, 0, 0.22);
     position: relative; /* anchor for the hand-pip count badge */
+}
+/* Tabled zone — public, face-up-by-default playmat row next to the
+   hand. Cards here can be flipped, rotated by click, or sent to the
+   bottom of the deck via right-click. Visible to the opponent.
+   Matched in size to the hand: same 40% width and same min-height so
+   the pair reads as twins flanking the center line. */
+.tabled {
+    width: 40%;
+    /* As a flex item in .hand-row its default min-width is `auto` =
+       min-content. With flex-wrap: nowrap that's the SUM of every
+       card-wrap, which would override the 40% width and let the
+       zone stretch as cards are added (the bug you saw). With
+       wrap, min-content is one card width; the 40% holds. */
+    min-width: 0;
+    min-height: 118px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 8px;
+    border-radius: 4px;
+    flex-wrap: wrap;
+    background: rgba(0, 0, 0, 0.16);
+    /* Inset 1px outline hint so the empty zone reads as a drop target. */
+    box-shadow: inset 0 0 0 1px var(--border);
+    position: relative;
+}
+.tabled.drag-over {
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* Tabled cards use the same stacked overlap as hand cards so a long
+   row stays compact. The rank+suit corner is in the top-left of each
+   card, so the overlap covers each card's right edge while leaving
+   its identifier visible. Hovering lifts a card to reveal the full
+   face (mirrors hand-hover behaviour). */
+.tabled .card-wrap:hover:not(.dragging-ghost-src) {
+    transform: translateY(-10px);
+    z-index: 5;
+}
+.tabled .card-wrap.menu-open {
+    transform: translateY(-10px);
+    z-index: 6;
+}
+/* Rotated card-wraps need a wider slot so neighbours don't overlap
+   them; the wrap doesn't auto-resize to its rotated child's bounding
+   box. Width tracks the card's tall axis (98px) plus a little air.
+   The card itself gets its `transform: rotate(...)` inline from JS. */
+.tabled .card-wrap.rotated {
+    width: 104px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 /* Revealed-hand indicator — accent-tinted border + faint inner glow so
    the owner can see at a glance that their hand is visible to the
@@ -353,11 +464,15 @@ canvas.board {
 
 .card-wrap {
     position: relative;
-    margin-left: -22px;
     cursor: grab;
 }
-.card-wrap:first-child {
-    margin-left: 0;
+/* Overlap each card-wrap with the one to its left so a row of cards
+   stacks compactly. Using `+ .card-wrap` instead of `:first-child`
+   means the rule only fires between consecutive card-wraps — so it
+   skips the leftmost one even when there's a preceding non-card
+   sibling like .hand-pip, which is what's actually first in the DOM. */
+.card-wrap + .card-wrap {
+    margin-left: -22px;
 }
 .hand:not(.opp) .card-wrap:hover:not(.dragging-ghost-src) {
     transform: translateY(-10px);
