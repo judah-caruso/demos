@@ -281,48 +281,49 @@ function setSelfPalette(name) {
 // Multi-line strings are supported (newlines are preserved).
 // ============================================================
 function genNumberedHeartText(N) {
-  return `Choose one:\n- Unwound a unit\n- Give a unit +${N} Might this turn`;
+  return `Choose one:\n- Play for 0 Mana: Unwound a unit\n- Give a unit +${N} Will this turn\nDiscard`;
 }
 
 function genNumberedDiamondText(N) {
-  return `Draw ${N} cards. Keep 1. Send the rest to the bottom of your deck.\nDiscard`;
+  const aOrAn = N == 8 ? "an" : "a";
+  return `Choose one:\n- Draw ${N} cards. Keep 1. Send the rest to the bottom of your deck. Discard\n- Play as ${aOrAn} ${N} Will unit (it dies after combat but goes to the bottom of your deck)`;
 }
 
 function genNumberedSpadeText(N) {
   const aOrAn = N == 8 ? "an" : "a";
-  return `Choose one:\n- Deal ${N} damage to a unit or player then discard\n- Play as ${aOrAn} ${N} Might unit`;
+  return `Choose one:\n- Deal ${N} damage to a unit or player. Discard\n- Play as ${aOrAn} ${N} Will unit`;
 }
 
 function genNumberedClubText(N) {
   const aOrAn = N == 8 ? "an" : "a";
-  return `Choose one:\n- Play as ${aOrAn} ${N} Might unit\n- Attach to another unit as a permanent +${N} Might buff (units can only have one attached buff; buffs are discarded when the unit dies)`;
+  return `Choose one:\n- Play as ${aOrAn} ${N} Will unit\n- Attach to another unit as a permanent +${N} Will buff (units can only have one attached buff; buffs are discarded when the unit dies)`;
 }
 
 const CARD_TOOLTIPS = {
   "K♥": "Start of turn, choose one:\n- Unwound up to 3 units\n- Give a player 3 HP",
   "K♦": "Start of turn: Draw 3 cards",
   "K♠": "Start of turn: Deal 3 damage to a unit or player",
-  "K♣": "Start of turn: Give a unit +3 Might permanently",
+  "K♣": "Start of turn: Give a unit +3 Will permanently",
 
   "Q♥": "When played, choose one:\n- Unwound up to 2 units\n- Give a player 2 HP",
   "Q♦": "When played: Draw 2 cards. If both are Red, repeat up to 2 more times",
   "Q♠": "When played: Deal 2 damage to up to 2 units or players",
-  "Q♣": "When played: Give your units +2 Might this turn",
+  "Q♣": "When played: Give your units +2 Will this turn",
 
-  "J♥": "After attacking: Give a player 1 HP",
+  "J♥": "After attacking: Unwound 1 unit",
   "J♦": "After attacking: Look at the top card of your deck; you may send it to the bottom",
   "J♠": "After attacking: Deal 1 damage to a unit",
-  "J♣": "After attacking, choose one:\n- Give a unit +1 might this turn\n- Ready a different Exhausted unit",
+  "J♣": "After attacking, choose one:\n- Give a unit +1 Will this turn\n- Ready a different Exhausted unit",
 
-  "A♥": "Spend X Power, choose one:\n- Give a unit +X might permanently\n- Give a player X HP\nDiscard",
-  "A♦": "Spend X Power: Draw X cards. Discard",
-  "A♠": "Spend X Power: Deal X damage to a unit or player. Discard",
-  "A♣": "Spend X Power: Play as an X Might unit",
+  "A♥": "Spend X Mana, choose one:\n- Give a unit +X Will permanently\n- Give a player X HP\nDiscard",
+  "A♦": "Spend X Mana: Draw X cards. Discard",
+  "A♠": "Spend X Mana: Deal X damage to a unit or player. Discard",
+  "A♣": "Spend X Mana: Play as an X Will unit",
 
   "Red Joker":
-    "Spend X Power, choose one:\n- Move the top X Red cards from your discard pile to your hand. Discard\n- Play as an X might unit that cannot attack. While alive: you may play one additional Power card per turn. This effect stacks",
+    "Spend X Mana, choose one:\n- Move the top X Red cards from your discard pile to your hand. Discard\n- Play as an X Will unit that cannot attack. While alive: you may play one additional Mana card per turn. This effect stacks",
   "Black Joker":
-    "Spend X Power, choose one:\n- Move the top X Black cards from your discard pile to your hand. Discard\n- Play as an X might unit that cannot attack. While alive: you may play one additional Power card per turn. This effect stacks",
+    "Spend X Mana, choose one:\n- Move the top X Black cards from your discard pile to your hand. Discard\n- Play as an X Will unit that cannot attack. While alive: you may play one additional Mana card per turn. This effect stacks",
 
   "2♥": genNumberedHeartText(2),
   "3♥": genNumberedHeartText(3),
@@ -3071,10 +3072,8 @@ function openHandCardContext(x, y, card, wrap) {
 // whether your hand is revealed to the opponent.
 const selfHandEl = document.getElementById("selfHand");
 selfHandEl.addEventListener("contextmenu", (e) => {
-  // Skip when the click was on a card — the card-wrap handler already
-  // ran and opened the per-card menu; its event bubbles here so we
-  // explicitly defer to it.
-  if (e.target.closest(".card-wrap")) return;
+  // Cards inside the hand have their own contextmenu handler that
+  // preventDefaults; this path only fires when the click misses a card.
   e.preventDefault();
   closeCtx();
   buildCtx([
