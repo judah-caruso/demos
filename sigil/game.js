@@ -178,7 +178,6 @@ function saveLocalState() {
         version: STATE_VERSION,
         deck: self.deck,
         hand: self.hand,
-        tabled: self.tabled,
         play: self.play,
         discard: self.discard,
         set: self.set,
@@ -611,7 +610,6 @@ function applyFastDeck(cardSpecs, label, sourceText) {
   shuffleInPlace(deck);
   self.deck = deck;
   self.hand = [];
-  self.tabled = [];
   self.discard = [];
   self.set = [];
   self.play = [];
@@ -629,7 +627,6 @@ function selectFullFormat() {
   self.deck = freshDeck();
   shuffleInPlace(self.deck);
   self.hand = [];
-  self.tabled = [];
   self.discard = [];
   self.set = [];
   self.play = [];
@@ -665,11 +662,6 @@ function isRed(c) {
 const self = {
   deck: [],
   hand: [],
-  // Public "tabled" zone next to the hand — cards here are visible to
-  // both players, can be rotated (click) or flipped (right-click), and
-  // travel with the standard moveCard/drag system. Each card carries
-  // its own `rot` (0/90/180/270) and `faceDown` flag.
-  tabled: [],
   discard: [],
   set: [], // "set aside" pile — cards picked from the deck via the
   // side section above the deck counter. Visible to both players.
@@ -683,7 +675,6 @@ const opp = {
   // array sent by the opp via broadcastState). When set, we render the
   // opp's hand face-up instead of as N card backs.
   hand: null,
-  tabled: [],
   discard: [],
   set: [],
   play: [],
@@ -1687,7 +1678,6 @@ function receiveOppState(data) {
   opp.deckCount = data.deckCount;
   opp.handCount = data.handCount;
   opp.hand = Array.isArray(data.hand) ? data.hand : null;
-  opp.tabled = Array.isArray(data.tabled) ? data.tabled : [];
   opp.discard = data.discard || [];
   opp.set = data.set || [];
   opp.play = newPlay;
@@ -1868,13 +1858,6 @@ function broadcastState() {
     return out;
   };
   const playForOpp = self.play.map(redactCard);
-  // Tabled cards: face-down ones only send id + rot + faceDown so the
-  // opp can't peek; face-up cards send their full data.
-  const redactTabled = (c) =>
-    c.faceDown
-      ? { id: c.id, rot: c.rot || 0, faceDown: true }
-      : c;
-  const tabledForOpp = self.tabled.map(redactTabled);
   conn.send({
     type: "state",
     deckCount: self.deck.length,
@@ -1883,7 +1866,6 @@ function broadcastState() {
     // cards so the opp can render them face-up. Otherwise omit, and
     // the opp falls back to N face-down backs based on handCount.
     hand: selfHandRevealed ? self.hand : null,
-    tabled: tabledForOpp,
     discard: self.discard,
     set: self.set,
     play: playForOpp,
@@ -1902,7 +1884,6 @@ function newDeck() {
   self.deck = freshDeck();
   shuffleInPlace(self.deck);
   self.hand = [];
-  self.tabled = [];
   self.discard = [];
   self.set = [];
   self.play = [];
@@ -2056,10 +2037,6 @@ function moveCard(source, target, opts) {
       attachedCards = card.attached.slice();
       delete card.attached;
     }
-  } else if (source.type === "tabled") {
-    const i = self.tabled.findIndex((c) => c.id === source.cardId);
-    if (i < 0) return;
-    [card] = self.tabled.splice(i, 1);
   }
   if (!card) return;
 
@@ -2102,10 +2079,6 @@ function moveCard(source, target, opts) {
       a.y = opts.y;
       self.play.push(a);
     }
-  } else if (target.type === "tabled") {
-    // Default to face-up + unrotated; the user toggles those after.
-    for (const a of attachedCards) self.tabled.push(a);
-    self.tabled.push(card);
   }
 
   const label =
@@ -2139,14 +2112,6 @@ function describeAction(s, t) {
     "setTop-discard": "Discarded from set:",
     "setTop-deckTop": "Returned to top of deck from set:",
     "setTop-deckBottom": "Sent to bottom of deck from set:",
-    "hand-tabled": "Tabled:",
-    "play-tabled": "Tabled from play:",
-    "deckTop-tabled": "Tabled from deck:",
-    "tabled-hand": "Returned tabled card to hand:",
-    "tabled-discard": "Discarded tabled card:",
-    "tabled-play": "Played tabled card:",
-    "tabled-deckTop": "Tabled → top of deck:",
-    "tabled-deckBottom": "Tabled → bottom of deck:",
   };
   return m[`${s}-${t}`] || "Moved:";
 }
@@ -2172,14 +2137,6 @@ function describeActionOpp(s, t) {
     "setTop-deckTop": "moved a card from their set pile to their deck",
     "setTop-deckBottom":
       "sent a card from their set pile to the bottom of their deck",
-    "hand-tabled": "tabled a card",
-    "play-tabled": "tabled a card from play",
-    "deckTop-tabled": "tabled a card from their deck",
-    "tabled-hand": "returned a tabled card to their hand",
-    "tabled-discard": "discarded a tabled card",
-    "tabled-play": "played a tabled card",
-    "tabled-deckTop": "moved a tabled card to top of deck",
-    "tabled-deckBottom": "moved a tabled card to bottom of deck",
   };
   return m[`${s}-${t}`] || "moved a card";
 }
@@ -2243,7 +2200,7 @@ function faceDownCardEl(opts) {
 function findDropZone(under) {
   if (!under) return null;
   return under.closest(
-    "#selfBoard, #selfDeckPile, #selfDiscardPile, #selfSetPile, #selfTabled, #selfHand, .half.self .hand-row",
+    "#selfBoard, #selfDeckPile, #selfDiscardPile, #selfSetPile, #selfHand, .half.self .hand-row",
   );
 }
 
@@ -2382,9 +2339,6 @@ function performGhostDrop(targetEl) {
   } else if (targetEl.id === "selfSetPile") {
     if (src.type === "setTop") return;
     moveCard(src, { type: "set" });
-  } else if (targetEl.id === "selfTabled") {
-    if (src.type === "tabled") return;
-    moveCard(src, { type: "tabled" });
   } else {
     if (src.type === "hand") return;
     moveCard(src, { type: "hand" });
@@ -2897,11 +2851,78 @@ function playedCardScreenRect(canvas, card) {
 selfCanvas.addEventListener("contextmenu", (e) => {
   const rect = selfCanvas.getBoundingClientRect();
   const card = hitTestPlay(e.clientX - rect.left, e.clientY - rect.top);
-  if (!card) return;
   e.preventDefault();
   hideTooltip();
-  openPlayCardContext(e.clientX, e.clientY, card);
+  if (card) {
+    openPlayCardContext(e.clientX, e.clientY, card);
+  } else {
+    openPlayBoardContext(e.clientX, e.clientY);
+  }
 });
+
+// Empty-area right-click on the play canvas — board-level actions
+// that affect all played cards at once.
+function openPlayBoardContext(x, y) {
+  closeCtx();
+  buildCtx([
+    { header: "Battlefield" },
+    {
+      label: "Untap Mana",
+      onClick: untapFlippedCards,
+    },
+    {
+      label: "Untap Everything",
+      onClick: untapEverything,
+    },
+  ]);
+  positionCtx(x, y);
+}
+
+function untapEverything() {
+  let changed = false;
+  for (const c of self.play) {
+    if (c.rot) {
+      c.rot = 0;
+      changed = true;
+    }
+
+    if (c.attached) {
+      for (const a of c.attached) {
+        if (a.rot) {
+          a.rot = 0;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (!changed) return;
+
+  drawSelf();
+  saveLocalState();
+  broadcastState();
+}
+
+function untapFlippedCards() {
+  let changed = false;
+  for (const c of self.play) {
+    if (c.faceDown && c.rot) {
+      c.rot = 0;
+      changed = true;
+    }
+    if (c.attached) {
+      for (const a of c.attached) {
+        if (a.faceDown && a.rot) {
+          a.rot = 0;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (!changed) return;
+  drawSelf();
+  saveLocalState();
+  broadcastState();
+}
 
 // ============================================================
 // Render: DOM zones (deck, discard, hand) + canvases
@@ -2967,82 +2988,7 @@ function renderSelf() {
     hand.appendChild(wrap);
   }
 
-  renderSelfTabled();
   drawSelf();
-}
-
-// Render the public "tabled" row next to the hand. Each card is
-// draggable, click-to-rotate, and right-click for Flip / Send-to-bottom.
-function renderSelfTabled() {
-  const zone = document.getElementById("selfTabled");
-  zone.querySelectorAll(".card-wrap").forEach((el) => el.remove());
-  document.getElementById("selfTabledCount").textContent = self.tabled.length;
-  for (const c of self.tabled) {
-    const wrap = document.createElement("div");
-    wrap.className = "card-wrap";
-    const rot = ((c.rot || 0) % 360 + 360) % 360;
-    const inner = c.faceDown ? faceDownCardEl() : cardEl(c);
-    if (rot !== 0) inner.style.transform = `rotate(${rot}deg)`;
-    // 90/270° rotation makes the card taller than wide; widen the
-    // wrap slot so neighbours don't overlap.
-    if (rot % 180 !== 0) wrap.classList.add("rotated");
-    wrap.appendChild(inner);
-    attachGhostDrag(wrap, () => ({ type: "tabled", cardId: c.id }));
-    wireTabledCardInteractions(wrap, c);
-    if (!c.faceDown) attachCardTooltip(wrap, c);
-    zone.appendChild(wrap);
-  }
-}
-
-function wireTabledCardInteractions(wrap, c) {
-  wrap.addEventListener("click", (e) => {
-    // Drags arm a click-suppression flag (set by armClickSuppression) so
-    // dropping a card doesn't accidentally rotate it.
-    if (suppressNextClick) return;
-    if (e.target.closest("button, input, .ctx-menu")) return;
-    rotateTabledCard(c.id);
-  });
-  wrap.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    openTabledCardContext(e.clientX, e.clientY, c, wrap);
-  });
-}
-
-function rotateTabledCard(id) {
-  const c = self.tabled.find((x) => x.id === id);
-  if (!c) return;
-  c.rot = ((c.rot || 0) + 90) % 360;
-  renderSelfTabled();
-  saveLocalState();
-  broadcastState();
-}
-
-function flipTabledCard(id) {
-  const c = self.tabled.find((x) => x.id === id);
-  if (!c) return;
-  c.faceDown = !c.faceDown;
-  renderSelfTabled();
-  saveLocalState();
-  broadcastState();
-}
-
-function openTabledCardContext(x, y, card, wrap) {
-  closeCtx();
-  ctxOpenWrap = wrap;
-  wrap.classList.add("menu-open");
-  buildCtx([
-    { header: card.faceDown ? "Tabled card (face-down)" : cardLabel(card) },
-    {
-      label: card.faceDown ? "Flip face-up" : "Flip face-down",
-      onClick: () => flipTabledCard(card.id),
-    },
-    {
-      label: "Send to bottom of deck",
-      onClick: () =>
-        moveCard({ type: "tabled", cardId: card.id }, { type: "deckBottom" }),
-    },
-  ]);
-  positionCtx(x, y);
 }
 
 function renderOpp() {
@@ -3090,29 +3036,7 @@ function renderOpp() {
     }
     oh.appendChild(w);
   }
-  renderOppTabled();
   drawOpp();
-}
-
-// Mirror of renderSelfTabled — read-only display of the opp's tabled
-// cards. No drag, no click-to-rotate, no context menu; tooltips on
-// face-up cards so the player can hover-inspect.
-function renderOppTabled() {
-  const zone = document.getElementById("oppTabled");
-  if (!zone) return;
-  zone.querySelectorAll(".card-wrap").forEach((el) => el.remove());
-  document.getElementById("oppTabledCount").textContent = opp.tabled.length;
-  for (const c of opp.tabled) {
-    const wrap = document.createElement("div");
-    wrap.className = "card-wrap";
-    const rot = ((c.rot || 0) % 360 + 360) % 360;
-    const inner = c.faceDown ? faceDownCardEl() : cardEl(c);
-    if (rot !== 0) inner.style.transform = `rotate(${rot}deg)`;
-    if (rot % 180 !== 0) wrap.classList.add("rotated");
-    wrap.appendChild(inner);
-    if (!c.faceDown) attachCardTooltip(wrap, c);
-    zone.appendChild(wrap);
-  }
 }
 
 // ============================================================
@@ -4696,8 +4620,7 @@ function tryRestoreSavedBoard() {
       (saved.hand ? saved.hand.length : 0) +
       (saved.play ? saved.play.length : 0) +
       (saved.discard ? saved.discard.length : 0) +
-      (saved.set ? saved.set.length : 0) +
-      (saved.tabled ? saved.tabled.length : 0) ===
+      (saved.set ? saved.set.length : 0) ===
     0
   ) {
     // Nothing to restore — treat as a fresh boot so newDeck() runs.
@@ -4705,7 +4628,6 @@ function tryRestoreSavedBoard() {
   }
   self.deck = saved.deck;
   self.hand = saved.hand || [];
-  self.tabled = saved.tabled || [];
   self.play = saved.play || [];
   self.discard = saved.discard || [];
   self.set = saved.set || [];
@@ -4720,7 +4642,6 @@ function tryRestoreSavedBoard() {
   };
   bump(self.deck);
   bump(self.hand);
-  bump(self.tabled);
   bump(self.play);
   bump(self.discard);
   bump(self.set);
