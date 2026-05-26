@@ -714,7 +714,7 @@ function armClickSuppression() {
     suppressNextClickTimer = null;
   }, 200);
 }
-let tKeyDown = false;
+let rKeyDown = false;
 let cKeyDown = false;
 let pKeyDown = false;
 let hoveredCardId = null;
@@ -734,7 +734,7 @@ function isTypingTarget(el) {
 }
 window.addEventListener("keydown", (e) => {
   if (isTypingTarget(e.target)) return;
-  if (e.key === "t" || e.key === "T") tKeyDown = true;
+  if (e.key === "r" || e.key === "R") rKeyDown = true;
   if (e.key === "p" || e.key === "P") pKeyDown = true;
   if (e.key === "c" || e.key === "C") {
     if (!cKeyDown) {
@@ -773,7 +773,7 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => {
   if (isTypingTarget(e.target)) return;
-  if (e.key === "t" || e.key === "T") tKeyDown = false;
+  if (e.key === "r" || e.key === "R") rKeyDown = false;
   if (e.key === "p" || e.key === "P") pKeyDown = false;
   if (e.key === "c" || e.key === "C") {
     if (cKeyDown) {
@@ -783,7 +783,7 @@ window.addEventListener("keyup", (e) => {
   }
 });
 window.addEventListener("blur", () => {
-  tKeyDown = false;
+  rKeyDown = false;
   pKeyDown = false;
   if (cKeyDown) {
     cKeyDown = false;
@@ -834,9 +834,9 @@ function roundRectPath(ctx, x, y, w, h, r) {
 function drawCard(ctx, card, x, y, opts) {
   opts = opts || {};
   // Lifted cards get a small "tilt" (extra 2°) for visual flair while
-  // dragged — but suppress it when the player is rotating (T held), so
+  // dragged — but suppress it when the player is rotating (R held), so
   // the cardinal snap reads clean against the table.
-  const rot = (card.rot || 0) + (opts.lifted && !tKeyDown ? 2 : 0);
+  const rot = (card.rot || 0) + (opts.lifted && !rKeyDown ? 2 : 0);
   const hovered = !!opts.hovered && !opts.lifted;
   // Hovered or being-dragged cards render at full size; otherwise the
   // played card uses BOARD_CARD_SCALE so the board fits more rows.
@@ -1319,7 +1319,7 @@ const ATTACH_PEEK_PX = 22;
 // If `child` itself had attached cards, they get flattened onto the new
 // parent so we don't need to handle nested attachment.
 function attachCardToCard(childId, parentId) {
-  if (cKeyDown || tKeyDown || pKeyDown) return;
+  if (cKeyDown || rKeyDown || pKeyDown) return;
   if (childId === parentId) return;
   const ci = self.play.findIndex((c) => c.id === childId);
   if (ci < 0) return;
@@ -2441,7 +2441,7 @@ function onCanvasMove(e) {
   const px = e.clientX - rect.left;
   const py = e.clientY - rect.top;
 
-  if (tKeyDown) {
+  if (rKeyDown) {
     // Rotate: pick the cardinal direction (N/E/S/W) the cursor sits in,
     // relative to the card's center, and snap rot to 0/90/180/270.
     // Inside a small dead zone around the center we hold the starting
@@ -2471,10 +2471,10 @@ function onCanvasMove(e) {
     card.y = Math.max(0, Math.min(maxYf, newY));
   }
   // Update the attach-preview target: another card whose center the
-  // dragged card currently overlaps. Skip while rotating (T held), and
+  // dragged card currently overlaps. Skip while rotating (R held), and
   // skip if the dragged card is face-down (face-down cards can't be
   // attached as the child, just as they can't be the parent).
-  if (!tKeyDown && !card.faceDown) {
+  if (!rKeyDown && !card.faceDown) {
     const cx = card.x * w + CARD_W / 2;
     const cy = card.y * h + CARD_H / 2;
     const t = findOtherCardAt(cx, cy, drag.cardId);
