@@ -1178,6 +1178,15 @@ canvas.board {
     font-style: normal;
     font-size: 12px;
 }
+/* Dice-roll lines pick up the roller's accent so it's obvious at a
+   glance who rolled. The icon stays its native colour; only the text
+   tints, which keeps the row from feeling like a heavy banner. */
+.chat-message.system.roll-self .chat-text {
+    color: var(--accent);
+}
+.chat-message.system.roll-opp .chat-text {
+    color: var(--opp-accent, var(--muted));
+}
 .chat-input {
     border: 0;
     border-top: 1px solid var(--border);

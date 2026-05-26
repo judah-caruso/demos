@@ -1571,7 +1571,8 @@ function wireConn() {
     else if (data.type === "move") receiveOppMove(data);
     else if (data.type === "log") log("Opponent: " + data.message);
     else if (data.type === "ping") triggerPing(data.side, data.cardId);
-    else if (data.type === "chat") receiveChatMessage(data.text, data.sender);
+    else if (data.type === "chat")
+      receiveChatMessage(data.text, data.sender, data.variant);
     else if (data.type === "winRecorded") receiveWinRecorded(data.wins);
     else if (data.type === "formatChange") receiveFormatChange(data.format);
     else if (data.type === "reset") {
@@ -3593,12 +3594,15 @@ function rollD20() {
   // Also surface in the chat as a system message, and broadcast a
   // chat-formatted version to the opponent (they see "Opponent
   // rolled a d20: N").
-  appendChatMessage("system", "You rolled a d20: " + roll);
+  appendChatMessage("system", "You rolled a d20: " + roll, "roll-self");
   if (conn && conn.open) {
     conn.send({
       type: "chat",
       sender: "system",
       text: "Opponent rolled a d20: " + roll,
+      // Receiver tags the row with this variant so it picks up the
+      // opp's accent (we sent it, so from their side it's the opp).
+      variant: "roll-opp",
     });
   }
 }
@@ -3917,9 +3921,10 @@ const chatMessagesEl = document.getElementById("chatMessages");
 const chatInput = document.getElementById("chatInput");
 let chatUnread = 0;
 
-function appendChatMessage(side, text) {
+function appendChatMessage(side, text, variant) {
   const row = document.createElement("div");
   row.className = "chat-message " + side;
+  if (variant) row.classList.add(variant);
   if (side === "system") {
     // System events (dice rolls, etc.) — no "You/Opponent" label,
     // just a small icon + italic line so they read as game noise,
@@ -3977,11 +3982,11 @@ function sendChatMessage(text) {
   }
 }
 
-function receiveChatMessage(text, sender) {
+function receiveChatMessage(text, sender, variant) {
   text = String(text || "").slice(0, 1000);
   if (!text) return;
   const side = sender === "system" ? "system" : "opp";
-  appendChatMessage(side, text);
+  appendChatMessage(side, text, variant);
   if (chatEl.classList.contains("collapsed")) {
     setChatUnread(chatUnread + 1);
     playBoop();
