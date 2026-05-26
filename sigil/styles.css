@@ -1198,3 +1198,67 @@ canvas.board {
 .chat-input::placeholder {
     color: var(--muted);
 }
+
+/* Controls dropdown — mirrors the chat panel pattern: a header button
+   in the top bar, an absolutely-positioned panel below that toggles
+   on click and closes on outside-click. Content is a list of action /
+   description rows grouped into sections. */
+.controls-menu {
+    position: relative;
+    display: inline-flex;
+}
+.controls-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    width: 320px;
+    max-height: 460px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    z-index: 60;
+    overflow-y: hidden;
+    padding: 10px 12px 12px;
+}
+.controls-menu.collapsed .controls-panel {
+    display: none;
+}
+.controls-section + .controls-section {
+    margin-top: 12px;
+}
+.controls-section h3 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+}
+.controls-section dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.controls-section dt {
+    color: var(--text);
+    white-space: nowrap;
+}
+.controls-section dd {
+    margin: 0;
+    color: var(--muted);
+}
+.controls-section kbd,
+.controls-section code {
+    display: inline-block;
+    padding: 1px 5px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.04);
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    color: var(--text);
+}

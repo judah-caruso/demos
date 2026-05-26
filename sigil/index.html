@@ -12,9 +12,67 @@
             <button id="btnGuide" class="secondary" type="button">
                 Player Guide
             </button>
-            <button id="btnRollD20" class="secondary" type="button">
+            <div class="controls-menu collapsed" id="controlsMenu">
+                <button
+                    class="controls-toggle secondary"
+                    id="controlsHeader"
+                    type="button"
+                >
+                    Controls
+                </button>
+                <div class="controls-panel">
+                    <section class="controls-section">
+                        <h3>Cards</h3>
+                        <dl>
+                            <dt><kbd>Drag</kbd></dt>
+                            <dd>Move a card</dd>
+                            <dt><kbd>T</kbd> + Drag</dt>
+                            <dd>Rotate</dd>
+                            <dt><kbd>P</kbd> + Click</dt>
+                            <dd>Ping a card (visible to opponent)</dd>
+                            <dt><kbd>C</kbd> + Hover</dt>
+                            <dd>Show counter widget</dd>
+                            <dt><kbd>C</kbd> + Scroll</dt>
+                            <dd>Adjust counter value</dd>
+                            <dt>Right-click</dt>
+                            <dd>Open card / pile menu</dd>
+                        </dl>
+                    </section>
+                    <section class="controls-section">
+                        <h3>Chat</h3>
+                        <dl>
+                            <dt><kbd>Enter</kbd></dt>
+                            <dd>Open chat</dd>
+                            <dt><kbd>/</kbd></dt>
+                            <dd>Open chat + start a command</dd>
+                            <dt><kbd>Esc</kbd></dt>
+                            <dd>Close chat</dd>
+                        </dl>
+                    </section>
+                    <section class="controls-section">
+                        <h3>Chat Commands</h3>
+                        <dl>
+                            <dt><code>/help</code></dt>
+                            <dd>Show command list</dd>
+                            <dt><code>/roll</code></dt>
+                            <dd>Roll a d20</dd>
+                            <dt><code>/win</code></dt>
+                            <dd>Record a win</dd>
+                            <dt><code>/stats</code></dt>
+                            <dd>Show score</dd>
+                            <dt><code>/reset</code></dt>
+                            <dd>Reset board &amp; wins</dd>
+                            <dt><code>/format</code> full | fast</dt>
+                            <dd>Change format</dd>
+                            <dt><code>/clear</code></dt>
+                            <dd>Clear chat history</dd>
+                        </dl>
+                    </section>
+                </div>
+            </div>
+            <!--<button id="btnRollD20" class="secondary" type="button">
                 Roll d20
-            </button>
+            </button>-->
             <div class="chat collapsed" id="chat">
                 <button
                     class="chat-toggle secondary"

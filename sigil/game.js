@@ -3602,7 +3602,7 @@ function rollD20() {
     });
   }
 }
-document.getElementById("btnRollD20").onclick = rollD20;
+// document.getElementById("btnRollD20").onclick = rollD20;
 document.getElementById("modalClose").onclick = closeModal;
 document.getElementById("modal").addEventListener("click", (e) => {
   if (e.target.id === "modal") closeModal();
@@ -4196,6 +4196,18 @@ document.addEventListener("click", (e) => {
   if (chatEl.classList.contains("collapsed")) return;
   if (e.target.closest("#chat")) return;
   closeChat();
+});
+
+// Controls dropdown — same toggle + click-outside-to-close pattern as
+// chat. Content is static, so there's no state to track beyond open/close.
+const controlsMenuEl = document.getElementById("controlsMenu");
+document.getElementById("controlsHeader").addEventListener("click", () => {
+  controlsMenuEl.classList.toggle("collapsed");
+});
+document.addEventListener("click", (e) => {
+  if (controlsMenuEl.classList.contains("collapsed")) return;
+  if (e.target.closest("#controlsMenu")) return;
+  controlsMenuEl.classList.add("collapsed");
 });
 
 // ============================================================
