@@ -3,8 +3,8 @@
 // ============================================================
 // Constants
 // ============================================================
-const CARD_W = 70;
-const CARD_H = 98;
+const CARD_W = 70 * 1.2;
+const CARD_H = 98 * 1.2;
 const CARD_RADIUS = 6;
 const DRAG_THRESHOLD_PX = 5;
 // Played (board) cards render scaled to free vertical room on the
@@ -186,13 +186,24 @@ function saveLocalState() {
         format: typeof currentFormat === "string" ? currentFormat : "full",
         fastDeckText:
           typeof lastFastDeckText === "string" ? lastFastDeckText : "",
+        wins: typeof selfWins === "number" ? selfWins : 0,
       }),
     );
   } catch (e) {
     // Quota / private-browsing / serialization failure — best-effort only.
   }
 }
+
 const _savedForBoot = loadSavedState();
+// Lobby win counts. selfWins persists across refresh so reconnecting
+// keeps your score; oppWins comes back via the next "winRecorded"
+// broadcast on reconnect. Both reset only when the user explicitly
+// hits Host/Join (i.e. starts a new lobby).
+let selfWins =
+  _savedForBoot && typeof _savedForBoot.wins === "number"
+    ? _savedForBoot.wins
+    : 0;
+let oppWins = 0;
 let selfPaletteName =
   _savedForBoot && ACCENT_PALETTES[_savedForBoot.palette]
     ? _savedForBoot.palette
@@ -689,7 +700,16 @@ let attachTargetId = null;
 let tooltipTimer = null;
 const tooltipEl = document.getElementById("cardTooltip");
 
+// Skip the game-control hotkeys (t/p/c) when the user is typing into
+// a text field — otherwise typing "type a message" would rotate
+// cards, ping things, and open the counter widget.
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
 window.addEventListener("keydown", (e) => {
+  if (isTypingTarget(e.target)) return;
   if (e.key === "t" || e.key === "T") tKeyDown = true;
   if (e.key === "p" || e.key === "P") pKeyDown = true;
   if (e.key === "c" || e.key === "C") {
@@ -698,8 +718,30 @@ window.addEventListener("keydown", (e) => {
       drawSelf();
     }
   }
+  // Chat hotkeys: Enter opens the chat; "/" opens it and seeds the
+  // textbox with a slash so the player can type a command immediately.
+  if (e.key === "Enter") {
+    if (chatEl && chatEl.classList.contains("collapsed")) {
+      e.preventDefault();
+      openChat();
+    }
+  } else if (e.key === "/") {
+    if (chatEl) {
+      e.preventDefault();
+      if (chatEl.classList.contains("collapsed")) openChat();
+      chatInput.value = "/" + chatInput.value;
+      // openChat() focuses on the next tick; queue our caret move after
+      // it so the cursor lands at the end of the seeded text.
+      setTimeout(() => {
+        chatInput.focus();
+        const n = chatInput.value.length;
+        chatInput.setSelectionRange(n, n);
+      }, 0);
+    }
+  }
 });
 window.addEventListener("keyup", (e) => {
+  if (isTypingTarget(e.target)) return;
   if (e.key === "t" || e.key === "T") tKeyDown = false;
   if (e.key === "p" || e.key === "P") pKeyDown = false;
   if (e.key === "c" || e.key === "C") {
@@ -760,7 +802,10 @@ function roundRectPath(ctx, x, y, w, h, r) {
 
 function drawCard(ctx, card, x, y, opts) {
   opts = opts || {};
-  const rot = (card.rot || 0) + (opts.lifted ? 2 : 0);
+  // Lifted cards get a small "tilt" (extra 2°) for visual flair while
+  // dragged — but suppress it when the player is rotating (T held), so
+  // the cardinal snap reads clean against the table.
+  const rot = (card.rot || 0) + (opts.lifted && !tKeyDown ? 2 : 0);
   const hovered = !!opts.hovered && !opts.lifted;
   // Hovered or being-dragged cards render at full size; otherwise the
   // played card uses BOARD_CARD_SCALE so the board fits more rows.
@@ -1423,7 +1468,10 @@ let autoJoining = false;
 
 async function host() {
   // Clicking Host starts a new game — wipe our board and signal the
-  // opp (when they connect) to wipe theirs too.
+  // opp (when they connect) to wipe theirs too. A fresh lobby also
+  // zeroes the win counters on both sides.
+  selfWins = 0;
+  oppWins = 0;
   newDeck();
   pendingReset = true;
   if (peer) peer.destroy();
@@ -1455,8 +1503,11 @@ async function join() {
   const target = extractPeerId(document.getElementById("joinId").value);
   if (!target) return;
   // Manual join → wipe local board + signal opp. Auto-rejoin after a
-  // refresh skips this so the saved board comes back intact.
+  // refresh skips this so the saved board comes back intact. A fresh
+  // join also zeroes the win counters on both sides.
   if (!autoJoining) {
+    selfWins = 0;
+    oppWins = 0;
     newDeck();
     pendingReset = true;
   }
@@ -1517,11 +1568,18 @@ function wireConn() {
     else if (data.type === "move") receiveOppMove(data);
     else if (data.type === "log") log("Opponent: " + data.message);
     else if (data.type === "ping") triggerPing(data.side, data.cardId);
+    else if (data.type === "chat") receiveChatMessage(data.text, data.sender);
+    else if (data.type === "winRecorded") receiveWinRecorded(data.wins);
+    else if (data.type === "formatChange") receiveFormatChange(data.format);
     else if (data.type === "reset") {
-      // Opp clicked Host/Join — wipe our board. newDeck() rebroadcasts
-      // so the opp's view of us updates to the fresh state.
+      // Opp clicked Host/Join or ran /reset — wipe our board and wins
+      // so both sides' scoreboards stay in sync. Format/palette/chat
+      // are preserved.
       log("Opponent started a new game — board reset");
-      newDeck();
+      selfWins = 0;
+      oppWins = 0;
+      resetBoardKeepingFormat();
+      saveLocalState();
     } else if (data.type === "hello") {
       if (data.palette && ACCENT_PALETTES[data.palette]) {
         oppPaletteName = data.palette;
@@ -2325,12 +2383,21 @@ function onCanvasMove(e) {
   if (tKeyDown) {
     // Rotate: pick the cardinal direction (N/E/S/W) the cursor sits in,
     // relative to the card's center, and snap rot to 0/90/180/270.
+    // Inside a small dead zone around the center we hold the starting
+    // rotation — otherwise tiny pixel wiggles near center flip between
+    // the four quadrants and feel twitchy to new players.
     const cx = card.x * w + CARD_W / 2;
     const cy = card.y * h + CARD_H / 2;
     const ddx = px - cx,
       ddy = py - cy;
-    if (Math.abs(ddx) > Math.abs(ddy)) card.rot = ddx > 0 ? 90 : 270;
-    else card.rot = ddy > 0 ? 180 : 0;
+    const ROT_DEADZONE = Math.min(CARD_W, CARD_H) * 0.4;
+    if (ddx * ddx + ddy * ddy < ROT_DEADZONE * ROT_DEADZONE) {
+      card.rot = drag.startRot;
+    } else if (Math.abs(ddx) > Math.abs(ddy)) {
+      card.rot = ddx > 0 ? 90 : 270;
+    } else {
+      card.rot = ddy > 0 ? 180 : 0;
+    }
   } else {
     // Move: keep cursor offset from the card's center constant.
     const newCx = px - drag.cursorOffCenterX;
@@ -3204,6 +3271,7 @@ window.addEventListener("keydown", (e) => {
     closeModal();
     if (typeof closeGuide === "function") closeGuide();
     if (typeof closeFormatModal === "function") closeFormatModal();
+    if (typeof closeChat === "function") closeChat();
     cleanupAnyDrag();
   }
 });
@@ -3515,11 +3583,23 @@ function drawManyMoveRestToBottom() {
 
 document.getElementById("btnHost").onclick = host;
 document.getElementById("btnJoin").onclick = join;
-document.getElementById("btnRollD20").onclick = () => {
+function rollD20() {
   const roll = 1 + Math.floor(Math.random() * 20);
   log("Rolled d20: " + roll);
   notifyOpp("rolled a d20: " + roll);
-};
+  // Also surface in the chat as a system message, and broadcast a
+  // chat-formatted version to the opponent (they see "Opponent
+  // rolled a d20: N").
+  appendChatMessage("system", "You rolled a d20: " + roll);
+  if (conn && conn.open) {
+    conn.send({
+      type: "chat",
+      sender: "system",
+      text: "Opponent rolled a d20: " + roll,
+    });
+  }
+}
+document.getElementById("btnRollD20").onclick = rollD20;
 document.getElementById("modalClose").onclick = closeModal;
 document.getElementById("modal").addEventListener("click", (e) => {
   if (e.target.id === "modal") closeModal();
@@ -3819,6 +3899,270 @@ document
   .addEventListener("click", closeFormatModal);
 formatModalEl.addEventListener("click", (e) => {
   if (e.target === formatModalEl) closeFormatModal();
+});
+
+// ============================================================
+// Chat panel
+// ============================================================
+// Floating collapsible chat. Sends `{ type: "chat", text }` over the
+// data channel; receiver appends to the messages list and bumps an
+// unread badge if the panel is collapsed.
+const chatEl = document.getElementById("chat");
+const chatHeaderBtn = document.getElementById("chatHeader");
+const chatBadge = document.getElementById("chatBadge");
+const chatMessagesEl = document.getElementById("chatMessages");
+const chatInput = document.getElementById("chatInput");
+let chatUnread = 0;
+
+function appendChatMessage(side, text) {
+  const row = document.createElement("div");
+  row.className = "chat-message " + side;
+  if (side === "system") {
+    // System events (dice rolls, etc.) — no "You/Opponent" label,
+    // just a small icon + italic line so they read as game noise,
+    // not chatter.
+    const icon = document.createElement("span");
+    icon.className = "chat-system-icon";
+    icon.textContent = "🎲";
+    const t = document.createElement("span");
+    t.className = "chat-text";
+    t.textContent = text;
+    row.appendChild(icon);
+    row.appendChild(t);
+  } else {
+    const sender = document.createElement("span");
+    sender.className = "chat-sender";
+    sender.textContent = side === "self" ? "You" : "Opponent";
+    const t = document.createElement("span");
+    t.className = "chat-text";
+    t.textContent = text;
+    row.appendChild(sender);
+    row.appendChild(t);
+  }
+  chatMessagesEl.appendChild(row);
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+function setChatUnread(n) {
+  chatUnread = n;
+  // Badge is now a pure dot indicator (no count) — just show/hide.
+  chatBadge.hidden = n === 0;
+}
+
+function openChat() {
+  chatEl.classList.remove("collapsed");
+  setChatUnread(0);
+  // Defer focus until the body has been laid out.
+  setTimeout(() => chatInput.focus(), 0);
+}
+
+function closeChat() {
+  chatEl.classList.add("collapsed");
+}
+
+function toggleChat() {
+  if (chatEl.classList.contains("collapsed")) openChat();
+  else closeChat();
+}
+
+function sendChatMessage(text) {
+  text = text.trim();
+  if (!text) return;
+  appendChatMessage("self", text);
+  if (conn && conn.open) {
+    conn.send({ type: "chat", text });
+  }
+}
+
+function receiveChatMessage(text, sender) {
+  text = String(text || "").slice(0, 1000);
+  if (!text) return;
+  const side = sender === "system" ? "system" : "opp";
+  appendChatMessage(side, text);
+  if (chatEl.classList.contains("collapsed")) {
+    setChatUnread(chatUnread + 1);
+  }
+}
+
+// Top-level chat dispatch — slash commands are intercepted and never
+// sent verbatim to the opp. Normal text falls through to sendChatMessage.
+function submitChatInput(text) {
+  text = text.trim();
+  if (!text) return;
+  if (text.startsWith("/")) handleChatCommand(text);
+  else sendChatMessage(text);
+}
+
+function handleChatCommand(line) {
+  const parts = line.trim().split(/\s+/);
+  const cmd = parts[0].toLowerCase();
+  const arg = parts.slice(1).join(" ").trim();
+  switch (cmd) {
+    case "/help":
+      cmdHelp();
+      break;
+    case "/roll":
+      cmdRoll();
+      break;
+    case "/win":
+      cmdWin();
+      break;
+    case "/stats":
+      cmdStats();
+      break;
+    case "/reset":
+      cmdReset();
+      break;
+    case "/format":
+      cmdFormat(arg);
+      break;
+    case "/clear":
+      cmdClear();
+      break;
+    default:
+      appendChatMessage(
+        "system",
+        `Unknown command: ${cmd}. Type /help for the list.`,
+      );
+  }
+}
+
+function cmdHelp() {
+  const lines = [
+    "---",
+    "/roll — roll a d20 (visible to both players)",
+    "/win — record a win for this lobby",
+    "/stats — show this lobby's score",
+    "/reset — reset both boards (keep scores)",
+    "/format full — switch lobby to Full format",
+    "/format fast — switch lobby to Fast format",
+    "/clear — clear your local chat history",
+    "/help — show this message",
+    "---",
+  ];
+  for (const l of lines) appendChatMessage("system", l);
+}
+
+function cmdClear() {
+  // Local-only — opp's history is theirs to manage.
+  chatMessagesEl.innerHTML = "";
+}
+
+function cmdRoll() {
+  // Call rollD20() directly — synthesizing a click on the button
+  // would bubble up to the "click outside chat closes the panel"
+  // handler and immediately close the chat after a /roll command.
+  rollD20();
+}
+
+function statsLine() {
+  // W–L per side. Your losses are the opp's wins (they won → you
+  // lost); their losses are your wins. Both peers display the same
+  // numbers in the same slots.
+  return `You: ${selfWins}–${oppWins} · Opponent: ${oppWins}–${selfWins}`;
+}
+
+function cmdWin() {
+  selfWins++;
+  saveLocalState();
+  appendChatMessage("system", `You won. ${statsLine()}`);
+  if (conn && conn.open) {
+    conn.send({ type: "winRecorded", wins: selfWins });
+  }
+}
+
+function cmdStats() {
+  appendChatMessage("system", statsLine());
+}
+
+function cmdReset() {
+  selfWins = 0;
+  oppWins = 0;
+  resetBoardKeepingFormat();
+  saveLocalState();
+  appendChatMessage("system", "Board reset");
+  if (conn && conn.open) {
+    conn.send({ type: "reset" });
+  }
+}
+
+// Reset the board to a fresh shuffled deck while leaving the player's
+// chosen format (and Fast deck list) intact. /reset uses this so wins
+// reset to 0–0 without dragging a Fast-format player back to Full.
+function resetBoardKeepingFormat() {
+  if (currentFormat === "fast" && lastFastDeckText) {
+    const { cards } = parseDeckText(lastFastDeckText);
+    if (cards.length) {
+      applyFastDeck(cards, "Fast", lastFastDeckText);
+      return;
+    }
+  }
+  newDeck();
+}
+
+function cmdFormat(arg) {
+  const fmt = arg.toLowerCase();
+  if (fmt === "full") {
+    selectFullFormat();
+    appendChatMessage("system", "Format set to Full");
+    if (conn && conn.open) {
+      conn.send({ type: "formatChange", format: "full" });
+    }
+  } else if (fmt === "fast") {
+    formatSelect.value = "fast";
+    openFastFormatModal();
+    appendChatMessage("system", "Format set to Fast — choose a deck");
+    if (conn && conn.open) {
+      conn.send({ type: "formatChange", format: "fast" });
+    }
+  } else {
+    appendChatMessage("system", "Usage: /format full | fast");
+  }
+}
+
+function receiveWinRecorded(wins) {
+  if (typeof wins !== "number") return;
+  oppWins = wins;
+  appendChatMessage("system", `Opponent won. ${statsLine()}`);
+  if (chatEl.classList.contains("collapsed")) {
+    setChatUnread(chatUnread + 1);
+  }
+}
+
+function receiveFormatChange(format) {
+  if (format === "full") {
+    selectFullFormat();
+    appendChatMessage("system", "Opponent switched to Full format");
+  } else if (format === "fast") {
+    formatSelect.value = "fast";
+    openFastFormatModal();
+    appendChatMessage(
+      "system",
+      "Opponent switched to Fast format — choose a deck",
+    );
+  }
+  if (chatEl.classList.contains("collapsed")) {
+    setChatUnread(chatUnread + 1);
+  }
+}
+
+chatHeaderBtn.addEventListener("click", toggleChat);
+chatInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    const v = chatInput.value;
+    chatInput.value = "";
+    submitChatInput(v);
+  } else if (e.key === "Escape") {
+    chatInput.blur();
+    closeChat();
+  }
+});
+// Click outside the chat (panel or toggle) → close.
+document.addEventListener("click", (e) => {
+  if (chatEl.classList.contains("collapsed")) return;
+  if (e.target.closest("#chat")) return;
+  closeChat();
 });
 
 // ============================================================
