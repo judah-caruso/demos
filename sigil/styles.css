@@ -296,6 +296,21 @@ canvas.board {
     background: rgba(0, 0, 0, 0.22);
     position: relative; /* anchor for the hand-pip count badge */
 }
+/* Revealed-hand indicator — accent-tinted border + faint inner glow so
+   the owner can see at a glance that their hand is visible to the
+   opponent. Self uses --accent; opp uses --opp-accent (from the opp's
+   palette) so each player's revealed-hand chrome stays in their own
+   color. */
+.hand.revealed {
+    box-shadow:
+        0 0 0 1px var(--accent),
+        inset 0 0 12px rgba(255, 255, 255, 0.04);
+}
+.hand.opp.revealed {
+    box-shadow:
+        0 0 0 1px var(--opp-accent, var(--accent)),
+        inset 0 0 12px rgba(255, 255, 255, 0.04);
+}
 /* Small "current cards in hand" count in the hand's inner corner —
    rectangular bordered chip matching the deck/discard pile count-badge
    so the three "card-count" readouts share one visual language. */

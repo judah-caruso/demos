@@ -669,11 +669,18 @@ const self = {
 const opp = {
   deckCount: 0,
   handCount: 0,
+  // Opp's revealed hand cards (null when not revealed; otherwise an
+  // array sent by the opp via broadcastState). When set, we render the
+  // opp's hand face-up instead of as N card backs.
+  hand: null,
   discard: [],
   set: [],
   play: [],
   counters: { deck: 30 },
 };
+// When true, broadcastState sends our full hand to the opp so they can
+// see what we're holding. Toggled via the hand-card right-click menu.
+let selfHandRevealed = false;
 
 let peer = null;
 let conn = null;
@@ -1625,6 +1632,7 @@ function receiveOppState(data) {
   }
   opp.deckCount = data.deckCount;
   opp.handCount = data.handCount;
+  opp.hand = Array.isArray(data.hand) ? data.hand : null;
   opp.discard = data.discard || [];
   opp.set = data.set || [];
   opp.play = newPlay;
@@ -1809,6 +1817,10 @@ function broadcastState() {
     type: "state",
     deckCount: self.deck.length,
     handCount: self.hand.length,
+    // When the player has chosen to reveal their hand, send the actual
+    // cards so the opp can render them face-up. Otherwise omit, and
+    // the opp falls back to N face-down backs based on handCount.
+    hand: selfHandRevealed ? self.hand : null,
     discard: self.discard,
     set: self.set,
     play: playForOpp,
@@ -2849,6 +2861,7 @@ function renderSelf() {
   const hand = document.getElementById("selfHand");
   // Remove only card-wraps so the hand-pip (count badge) stays in place.
   hand.querySelectorAll(".card-wrap").forEach((el) => el.remove());
+  hand.classList.toggle("revealed", selfHandRevealed);
   document.getElementById("selfHandCount").textContent = self.hand.length;
   for (const c of self.hand) {
     const wrap = document.createElement("div");
@@ -2893,10 +2906,22 @@ function renderOpp() {
   const oh = document.getElementById("oppHand");
   oh.querySelectorAll(".card-wrap").forEach((el) => el.remove());
   document.getElementById("oppHandCount").textContent = opp.handCount;
-  for (let i = 0; i < opp.handCount; i++) {
+  // If the opp chose to reveal their hand, render the actual cards
+  // face-up (with tooltips). Otherwise fall back to N anonymous backs.
+  const revealed = Array.isArray(opp.hand);
+  oh.classList.toggle("revealed", revealed);
+  const cards = revealed ? opp.hand : null;
+  const n = revealed ? cards.length : opp.handCount;
+  for (let i = 0; i < n; i++) {
     const w = document.createElement("div");
     w.className = "card-wrap";
-    w.appendChild(faceDownCardEl());
+    if (revealed) {
+      const c = cards[i];
+      w.appendChild(cardEl(c));
+      attachCardTooltip(w, c);
+    } else {
+      w.appendChild(faceDownCardEl());
+    }
     oh.appendChild(w);
   }
   drawOpp();
@@ -3040,6 +3065,34 @@ function openHandCardContext(x, y, card, wrap) {
     },
   ]);
   positionCtx(x, y);
+}
+
+// Right-click on the hand container itself (not a card) → toggle
+// whether your hand is revealed to the opponent.
+const selfHandEl = document.getElementById("selfHand");
+selfHandEl.addEventListener("contextmenu", (e) => {
+  // Skip when the click was on a card — the card-wrap handler already
+  // ran and opened the per-card menu; its event bubbles here so we
+  // explicitly defer to it.
+  if (e.target.closest(".card-wrap")) return;
+  e.preventDefault();
+  closeCtx();
+  buildCtx([
+    { header: "Hand" },
+    {
+      label: selfHandRevealed
+        ? "Hide hand from opponent"
+        : "Reveal hand to opponent",
+      onClick: toggleHandReveal,
+    },
+  ]);
+  positionCtx(e.clientX, e.clientY);
+});
+
+function toggleHandReveal() {
+  selfHandRevealed = !selfHandRevealed;
+  renderSelf();
+  broadcastState();
 }
 
 function openPlayCardContext(x, y, card) {
@@ -4116,6 +4169,7 @@ function cmdStats() {
 function cmdReset() {
   selfWins = 0;
   oppWins = 0;
+  selfHandRevealed = false;
   resetBoardKeepingFormat();
   saveLocalState();
   appendChatMessage("system", "Board reset");
