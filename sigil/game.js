@@ -4461,6 +4461,18 @@ document.addEventListener("click", (e) => {
   controlsMenuEl.classList.add("collapsed");
 });
 
+// Changelog dropdown — opens when the version label in the header is
+// clicked. Same dropdown pattern as controls/chat.
+const changelogMenuEl = document.getElementById("changelogMenu");
+document.getElementById("changelogToggle").addEventListener("click", () => {
+  changelogMenuEl.classList.toggle("collapsed");
+});
+document.addEventListener("click", (e) => {
+  if (changelogMenuEl.classList.contains("collapsed")) return;
+  if (e.target.closest("#changelogMenu")) return;
+  changelogMenuEl.classList.add("collapsed");
+});
+
 // ============================================================
 // Guide modal (image viewer with zoom + drag-to-pan)
 // ============================================================

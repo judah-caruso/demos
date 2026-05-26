@@ -91,9 +91,52 @@
                     />
                 </div>
             </div>
-            <span class="header-sep" aria-hidden="true"
-                >✦ <span class="header-version">0.2</span></span
-            >
+            <div class="changelog-menu collapsed" id="changelogMenu">
+                <span class="header-sep" aria-hidden="true">✦</span>
+                <button
+                    class="header-version changelog-toggle"
+                    id="changelogToggle"
+                    type="button"
+                    title="Open changelog"
+                >
+                    0.2
+                </button>
+                <div class="changelog-panel">
+                    <section class="changelog-section">
+                        <h3>2025/05/26</h3>
+                        <ul>
+                            <li>
+                                Swapped card rotation key from <kbd>T</kbd> to
+                                <kbd>R</kbd>
+                            </li>
+                            <li>Added player turn indicator</li>
+                            <li>
+                                Added in-game chat with commands (use
+                                <code>/help</code>)
+                            </li>
+                            <li>Added dedicated Sigil zone</li>
+                        </ul>
+                    </section>
+                    <section class="changelog-section">
+                        <h3>0.2 - 2025/05/26</h3>
+                        <ul>
+                            <li>
+                                N of ♥ - Added option "Play for 0 Mana: Unwound
+                                a unit"
+                            </li>
+                            <li>
+                                N of ♦ - Added option "Play as an N Will unit
+                                (it dies after combat but goes to the bottom of
+                                your deck)"
+                            </li>
+                        </ul>
+                    </section>
+                    <section class="changelog-section">
+                        <h3>0.1 - 2025/05/25</h3>
+                        <span>Initital release</span>
+                    </section>
+                </div>
+            </div>
 
             <select id="formatSelect" class="format-select">
                 <option value="full">Format: Full</option>
