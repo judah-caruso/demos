@@ -1833,11 +1833,17 @@ function broadcastState() {
   // survive a refresh so the player can reconnect with their board
   // intact.
   saveLocalState();
+  // Side effect: log the latest snapshot of OUR state to the console
+  // after every action so it's easy to grab if the connection dies.
+  // Async (compression + HMAC) — fire and forget, the next action's
+  // log will overwrite this one anyway.
+  makeSnapshot()
+    .then((code) => console.log("[snapshot]", code))
+    .catch(() => {});
   if (!conn || !conn.open) return;
-  // For face-down cards we hide the rank/suit from the opponent so they
-  // can't peek by inspecting the wire data. The counter and attached
-  // cards (including their own redaction) are still sent so the opponent
-  // can see the table-visible parts of the stack.
+  // Face-down cards hide their rank/suit on the wire so the opponent
+  // can't peek by inspecting the data. Counter and attached cards
+  // (including their own redaction) still go through.
   const redactCard = (c) => {
     let out;
     if (c.faceDown) {
@@ -1857,18 +1863,15 @@ function broadcastState() {
     }
     return out;
   };
-  const playForOpp = self.play.map(redactCard);
   conn.send({
     type: "state",
     deckCount: self.deck.length,
     handCount: self.hand.length,
-    // When the player has chosen to reveal their hand, send the actual
-    // cards so the opp can render them face-up. Otherwise omit, and
-    // the opp falls back to N face-down backs based on handCount.
+    // Hand is only sent when the player has chosen to reveal it.
     hand: selfHandRevealed ? self.hand : null,
     discard: self.discard,
     set: self.set,
-    play: playForOpp,
+    play: self.play.map(redactCard),
     counters: self.counters,
   });
 }
@@ -4267,6 +4270,12 @@ function handleChatCommand(line) {
     case "/myturn":
       cmdMyTurn();
       break;
+    case "/snapshot":
+      cmdSnapshot();
+      break;
+    case "/restore":
+      cmdRestore();
+      break;
     case "/format":
       cmdFormat(arg);
       break;
@@ -4283,18 +4292,23 @@ function handleChatCommand(line) {
 
 function cmdHelp() {
   const lines = [
-    "---",
-    "/roll — roll a d20 (visible to both players)",
-    "/win — record a win for this lobby",
-    "/stats — show this lobby's score",
-    "/reset — reset both boards and wins",
-    "/newgame — reset both boards (keep wins/turn)",
-    "/myturn — claim the current turn",
-    "/format full — switch lobby to Full format",
-    "/format fast — switch lobby to Fast format",
-    "/clear — clear your local chat history",
-    "/help — show this message",
-    "---",
+    "-- Basic commands --",
+    "/roll - rolls a d20",
+    "/myturn - makes it your turn (useful for going first)",
+    "/win - records a win for this lobby",
+    "/stats - shows lobby wins/losses",
+    "/newgame - starts a new game",
+    "/format full - switch lobby to Full format",
+    "/format fast - switch lobby to Fast format",
+
+    "-- Admin commands --",
+    "/reset - resets the lobby (including stats)",
+    "/snapshot - saves your board state to your clipboard",
+    "/restore - restores your board from your clipboard (run /snapshot first)",
+
+    "-- Other commands --",
+    "/help - show this message",
+    "/clear - clear your local chat history",
   ];
   for (const l of lines) appendChatMessage("system", l);
 }
@@ -4368,6 +4382,240 @@ function cmdMyTurn() {
   if (conn && conn.open) {
     conn.send({ type: "turnChange", turn: "opp" });
   }
+}
+
+const SNAPSHOT_VERSION = 1;
+const SNAPSHOT_KEY = "sigil-snapshot";
+
+function utf8Encode(s) {
+  return new TextEncoder().encode(s);
+}
+function utf8Decode(bytes) {
+  return new TextDecoder().decode(bytes);
+}
+function concatBytes(chunks) {
+  let len = 0;
+  for (const c of chunks) len += c.length;
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+async function streamCompress(bytes) {
+  const cs = new CompressionStream("deflate");
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const reader = cs.readable.getReader();
+  const chunks = [];
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  return concatBytes(chunks);
+}
+async function streamDecompress(bytes) {
+  const ds = new DecompressionStream("deflate");
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  return concatBytes(chunks);
+}
+async function hmacSha256(secret, bytes) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    utf8Encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, bytes);
+  return new Uint8Array(sig);
+}
+function bytesToBase64Url(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function base64UrlToBytes(str) {
+  let s = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function makeSnapshot() {
+  const payload = {
+    v: SNAPSHOT_VERSION,
+    state: {
+      deck: self.deck,
+      hand: self.hand,
+      play: self.play,
+      discard: self.discard,
+      set: self.set,
+      counters: self.counters,
+      wins: selfWins,
+      handRevealed: !!selfHandRevealed,
+      palette: selfPaletteName,
+    },
+    lobby: {
+      turn: currentTurn,
+      format: typeof currentFormat === "string" ? currentFormat : "full",
+      fastDeckText:
+        typeof lastFastDeckText === "string" ? lastFastDeckText : "",
+    },
+  };
+  const compressed = await streamCompress(utf8Encode(JSON.stringify(payload)));
+  const sig = await hmacSha256(SNAPSHOT_KEY, compressed);
+  return bytesToBase64Url(concatBytes([sig.slice(0, 8), compressed]));
+}
+
+async function parseSnapshot(code) {
+  const bytes = base64UrlToBytes(code);
+  if (bytes.length < 9) throw new Error("too short");
+  const sig = bytes.slice(0, 8);
+  const compressed = bytes.slice(8);
+  const expected = (await hmacSha256(SNAPSHOT_KEY, compressed)).slice(0, 8);
+  // Constant-time-ish equality — short enough that an XOR-sum loop is
+  // fine; we're not chasing timing-attack resistance.
+  let mismatch = 0;
+  for (let i = 0; i < 8; i++) mismatch |= sig[i] ^ expected[i];
+  if (mismatch) throw new Error("bad signature");
+  const json = utf8Decode(await streamDecompress(compressed));
+  const snap = JSON.parse(json);
+  if (!snap || snap.v !== SNAPSHOT_VERSION || !snap.state) {
+    throw new Error("unsupported");
+  }
+  return snap;
+}
+
+async function cmdSnapshot() {
+  let code;
+  try {
+    code = await makeSnapshot();
+  } catch (e) {
+    appendChatMessage("system", "Snapshot failed");
+    return;
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(code);
+      appendChatMessage(
+        "system",
+        `Snapshot copied to clipboard (${code.length} chars)`,
+      );
+      return;
+    } catch (e) {
+      // Fall through to chat fallback.
+    }
+  }
+  // Clipboard unavailable — print into chat as a last resort.
+  appendChatMessage("system", "Snapshot:");
+  appendChatMessage("system", code);
+}
+
+async function cmdRestore() {
+  // Snapshot codes are too long for the chat input, so /restore
+  // always reads from the clipboard — pair it with /snapshot, which
+  // writes the latest code there.
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    appendChatMessage("system", "Clipboard access is unavailable");
+    return;
+  }
+  let code;
+  try {
+    code = (await navigator.clipboard.readText()).trim();
+  } catch (e) {
+    appendChatMessage("system", "Clipboard read denied");
+    return;
+  }
+  if (!code) {
+    appendChatMessage("system", "Clipboard is empty");
+    return;
+  }
+  let snap;
+  try {
+    snap = await parseSnapshot(code);
+  } catch (e) {
+    appendChatMessage("system", "Invalid snapshot");
+    return;
+  }
+  applySnapshotLocal(snap);
+  // Push lobby-level changes (turn, format) and the updated win count
+  // to the connected peer so the two sides stay in sync.
+  if (conn && conn.open) {
+    conn.send({
+      type: "turnChange",
+      turn: currentTurn === "self" ? "opp" : "self",
+    });
+    conn.send({ type: "formatChange", format: currentFormat });
+    conn.send({ type: "winRecorded", wins: selfWins });
+    broadcastState();
+  }
+  appendChatMessage("system", "Snapshot restored");
+}
+
+// Apply a decoded snapshot to the local player only. Does NOT touch
+// the opp's state — they'll send their own broadcast or restore from
+// their own code.
+function applySnapshotLocal(snap) {
+  const s = snap.state;
+  self.deck = s.deck || [];
+  self.hand = s.hand || [];
+  self.play = s.play || [];
+  self.discard = s.discard || [];
+  self.set = s.set || [];
+  self.counters = s.counters || { deck: 30 };
+  selfWins = typeof s.wins === "number" ? s.wins : 0;
+  selfHandRevealed = !!s.handRevealed;
+  if (s.palette && ACCENT_PALETTES[s.palette]) {
+    selfPaletteName = s.palette;
+    applySelfPalette();
+  }
+  if (snap.lobby) {
+    if (snap.lobby.turn === "self" || snap.lobby.turn === "opp") {
+      currentTurn = snap.lobby.turn;
+    }
+    if (typeof snap.lobby.format === "string") {
+      currentFormat = snap.lobby.format;
+      const sel = document.getElementById("formatSelect");
+      if (sel) sel.value = currentFormat;
+    }
+    if (typeof snap.lobby.fastDeckText === "string") {
+      lastFastDeckText = snap.lobby.fastDeckText;
+    }
+  }
+  // Re-seat the card id counter so newly drawn cards don't collide.
+  let maxId = cardIdCounter;
+  const bump = (list) => {
+    for (const c of list || []) {
+      const n = parseInt(String(c.id || "").slice(1), 10);
+      if (!isNaN(n) && n > maxId) maxId = n;
+      if (c.attached) bump(c.attached);
+    }
+  };
+  bump(self.deck);
+  bump(self.hand);
+  bump(self.play);
+  bump(self.discard);
+  bump(self.set);
+  cardIdCounter = maxId;
+  applyTurnVisual();
+  renderSelf();
+  saveLocalState();
 }
 
 // Reset the board to a fresh shuffled deck while leaving the player's
