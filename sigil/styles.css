@@ -1156,6 +1156,9 @@ canvas.board {
 .chat-message.self .chat-sender {
     color: var(--accent);
 }
+.chat-message.opp .chat-sender {
+    color: var(--opp-accent, var(--muted));
+}
 .chat-message .chat-text {
     color: var(--text);
 }

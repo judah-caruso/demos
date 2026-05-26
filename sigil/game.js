@@ -244,6 +244,9 @@ function applyOppPalette() {
   oppHalf.style.setProperty("--card-back-border", p.cardBackBorder);
   oppHalf.style.setProperty("--card-back-mark", p.cardBackMark);
   oppHalf.style.setProperty("--card-back-pattern", p.cardBackPattern);
+  // Expose opp's accent at the document root too, so DOM outside the
+  // opp half (e.g. chat-message "Opponent" labels) can colour-match.
+  document.documentElement.style.setProperty("--opp-accent", p.accent);
 }
 applySelfPalette();
 // applyOppPalette() runs after the DOM is ready (the .half.opp
@@ -3981,7 +3984,37 @@ function receiveChatMessage(text, sender) {
   appendChatMessage(side, text);
   if (chatEl.classList.contains("collapsed")) {
     setChatUnread(chatUnread + 1);
+    playBoop();
   }
+}
+
+// Lazily-built AudioContext for the short "boop" we play when a chat
+// message arrives with the panel collapsed. Browsers require a prior
+// user gesture to unlock audio — by the time a peer message can arrive
+// the user has already clicked/typed, so we can safely create it here.
+let _boopCtx = null;
+function playBoop() {
+  try {
+    if (!_boopCtx) {
+      const C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return;
+      _boopCtx = new C();
+    }
+    const ctx = _boopCtx;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(400, now);
+    // Tiny ADSR: 8ms attack, ~180ms exponential decay. Peak gain is
+    // intentionally quiet so it's a notification, not an alert.
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.2);
+  } catch (e) {}
 }
 
 // Top-level chat dispatch — slash commands are intercepted and never
