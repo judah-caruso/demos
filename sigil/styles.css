@@ -178,6 +178,30 @@ input[type="text"]::placeholder {
     color: var(--text);
 }
 
+/* Right-side header chrome: player name + spectator count + status.
+   The first visible tag carries `margin-left: auto` so the whole
+   cluster floats right; the rest sit next to it with a small gap. */
+.header-tag {
+    color: var(--muted);
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1;
+}
+.header-tag[hidden] {
+    display: none;
+}
+.player-tag {
+    margin-left: auto;
+}
+.player-tag:not([hidden]) ~ .status,
+.player-tag:not([hidden]) ~ .spectator-tag {
+    margin-left: 0;
+}
+.spectator-tag .pill-icon {
+    font-size: 11px;
+}
 .status {
     margin-left: auto;
     color: var(--muted);
@@ -275,6 +299,12 @@ input[type="text"]::placeholder {
     background: transparent;
     border-color: var(--border);
 }
+/* Spectator mode — hide the End Turn floating button. The hand zone
+   still shows the host's count via face-down card backs (rendered by
+   renderSelf), so we don't dim it. */
+body.spectator .end-turn-fab {
+    display: none;
+}
 .midline {
     height: 1px;
     background: var(--border);
@@ -336,6 +366,13 @@ canvas.board {
 .half.opp .zones-side {
     right: calc(50% + min(40%, calc(50% - 120px)) + 8px);
     top: 8px;
+    /* Mirror the opp column vertically so the running order reads as
+       if it were the bottom-half layout flipped 180° across the
+       midline — discard first, then deck, then sigil, name below it. */
+    flex-direction: column-reverse;
+}
+.half.opp .zones-side > .zone {
+    flex-direction: column-reverse;
 }
 
 .dragging-ghost-src {
@@ -451,6 +488,30 @@ canvas.board {
     flex-direction: column;
     align-items: center;
     gap: 4px;
+}
+
+/* Player name label sitting between the deck counter and the deck
+   pile. Empty/hidden when the player hasn't set a name. Color picks
+   up the side's accent so each player's name reads in their own
+   palette (matches the chat-sender styling). */
+.counter-name {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    text-align: center;
+    color: var(--accent);
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.counter-name:empty {
+    display: none;
+}
+.half.opp .counter-name {
+    color: var(--opp-accent, var(--muted));
 }
 
 /* Number counter (above the deck and on cards). Single rounded chip
@@ -1243,7 +1304,10 @@ canvas.board {
     margin-bottom: 2px;
 }
 .chat-message.self .chat-sender {
-    color: var(--accent);
+    /* Use our REAL palette (`--self-chat-accent`) rather than
+       `--accent`, which a spectator overrides with the host's colour
+       for the bottom half. Falls back to `--accent` for older paths. */
+    color: var(--self-chat-accent, var(--accent));
 }
 .chat-message.opp .chat-sender {
     color: var(--opp-accent, var(--muted));

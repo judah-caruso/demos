@@ -188,6 +188,8 @@ function saveLocalState() {
           typeof lastFastDeckText === "string" ? lastFastDeckText : "",
         wins: typeof selfWins === "number" ? selfWins : 0,
         turn: currentTurn,
+        spectatorsAllowed: !!spectatorsAllowed,
+        name: typeof selfName === "string" ? selfName : "",
       }),
     );
   } catch (e) {
@@ -205,10 +207,27 @@ let selfWins =
     ? _savedForBoot.wins
     : 0;
 let oppWins = 0;
+// Display names — local player's name is persisted, opp's name comes
+// in via the "hello" message on connect (and again any time the opp
+// changes it via /name). First-time players get a random "Player NN"
+// default so chat + name labels never read as anonymous; we persist
+// the picked default below so the number doesn't reshuffle on every
+// refresh.
+const _savedName =
+  _savedForBoot && typeof _savedForBoot.name === "string" && _savedForBoot.name;
+let selfName = _savedName || "Player " + (10 + Math.floor(Math.random() * 90));
+let oppName = "";
 let selfPaletteName =
   _savedForBoot && ACCENT_PALETTES[_savedForBoot.palette]
     ? _savedForBoot.palette
     : PALETTE_NAMES[Math.floor(Math.random() * PALETTE_NAMES.length)];
+// Spectator-mode flag and player-side palette name are hoisted up
+// here so the palette helpers (which read both) can fire safely at
+// boot — without this, the `let` declarations further down would
+// trip the temporal-dead-zone trap when applySelfPalette runs at
+// module load. Real values still come from peer messages later.
+let isSpectator = false;
+let playerPaletteName = "";
 // Default to blue so opp card backs aren't blank before the opp's
 // "hello" arrives; overridden as soon as the connection opens.
 let oppPaletteName = "blue";
@@ -219,8 +238,23 @@ function getPalette(name) {
 // drawBoard() so card-back, hover halo, and ping draws don't need to
 // thread the palette through every call site.
 let currentRenderPalette = getPalette(selfPaletteName);
+// Resolve which palette name drives each half. Spectators map their
+// own halves to the players: bottom (self half) renders as the host,
+// top (opp half) renders as the other player. The host's palette
+// arrives in `oppPaletteName` via the hello message; the player's
+// palette arrives in `playerPaletteName` via a forwarded peerHello.
+function selfHalfPaletteName() {
+  return isSpectator
+    ? oppPaletteName || selfPaletteName
+    : selfPaletteName;
+}
+function oppHalfPaletteName() {
+  return isSpectator
+    ? playerPaletteName || oppPaletteName
+    : oppPaletteName;
+}
 function applySelfPalette() {
-  const p = getPalette(selfPaletteName);
+  const p = getPalette(selfHalfPaletteName());
   const root = document.documentElement.style;
   root.setProperty("--accent", p.accent);
   root.setProperty("--accent2", p.accent2);
@@ -232,9 +266,15 @@ function applySelfPalette() {
   root.setProperty("--card-back-border", p.cardBackBorder);
   root.setProperty("--card-back-mark", p.cardBackMark);
   root.setProperty("--card-back-pattern", p.cardBackPattern);
+  // The chat-sender for our own messages uses our REAL palette
+  // (the colour we picked), not the half-mapped one — so a spectator
+  // whose bottom half is recoloured to the host's palette still sees
+  // their own chat labelled in their chosen colour.
+  const own = getPalette(selfPaletteName);
+  root.setProperty("--self-chat-accent", own.accent);
 }
 function applyOppPalette() {
-  const p = getPalette(oppPaletteName);
+  const p = getPalette(oppHalfPaletteName());
   // Scope opp's card-back vars to .half.opp so the opp's deck/discard
   // DOM piles render in opp's color. The page-wide --accent stays as
   // self's color (it's the *local player's* identity).
@@ -267,7 +307,7 @@ function setSelfPalette(name) {
   if (typeof drawSelf === "function") drawSelf();
   if (typeof renderSelf === "function") renderSelf();
   if (conn && conn.open) {
-    conn.send({ type: "hello", palette: selfPaletteName });
+    conn.send({ type: "hello", palette: selfPaletteName, name: selfName });
   }
   saveLocalState();
   log("Accent color → " + selfPaletteName);
@@ -698,6 +738,33 @@ let conn = null;
 // pick a canonical "first turn" assignment when a new lobby starts —
 // the host gets "self", joiner gets "opp".
 let isHost = false;
+// Host-only: when true, additional connections after the primary
+// player are accepted as read-only spectators (board visible, hands
+// hidden). Toggled via the `/spectators on|off` command. Persisted
+// in localStorage so a refresh inside the same lobby keeps the
+// previous setting.
+let spectatorsAllowed =
+  _savedForBoot && typeof _savedForBoot.spectatorsAllowed === "boolean"
+    ? _savedForBoot.spectatorsAllowed
+    : false;
+// Host-only: every additional connection past the primary player.
+// broadcastState and chat fan-out walk this array alongside `conn`.
+let spectatorConns = [];
+// Joiner-only: true after the host has told us we joined as a
+// spectator (no actions, hand zones hidden, etc.). The actual
+// declaration of `isSpectator` is hoisted to the palette section so
+// the palette helpers can read it at module-load time without
+// hitting the TDZ.
+// Spectator-only: counts and the host's redacted state, kept beside
+// the (empty) self/opp arrays so renderSelf can show realistic
+// numbers without hand contents.
+let spectatorSelfDeckCount = 0;
+let spectatorSelfHandCount = 0;
+// Spectator-only: the player's (top-half) name. Filled in by the
+// peerHello message the host forwards. `playerPaletteName` is also
+// part of this pair but lives up top with `isSpectator` for the same
+// TDZ reason.
+let playerName = "";
 let drag = null;
 let suppressNextClick = false;
 let suppressNextClickTimer = null;
@@ -1233,6 +1300,29 @@ function drawBoard(canvas, ctx, cards, hoverId) {
       );
     }
   }
+  // Click-ripples (drawn over everything, including pings). The
+  // clicker's palette + name ride along with each entry so the
+  // ripple uses their colour and is labelled with their name.
+  if (activeDust.length > 0) {
+    const side = canvas === selfCanvas ? "self" : "opp";
+    const now = performance.now();
+    for (const d of activeDust) {
+      if (d.side !== side) continue;
+      const pal =
+        d.palette && ACCENT_PALETTES[d.palette]
+          ? ACCENT_PALETTES[d.palette]
+          : currentRenderPalette;
+      drawDust(
+        ctx,
+        d.x * w,
+        d.y * h,
+        now - d.startTime,
+        pal.accentRgb,
+        d.name,
+        mirrored,
+      );
+    }
+  }
 }
 
 function drawSelf() {
@@ -1397,6 +1487,57 @@ function setStatus(text, cls) {
   el.className = "status" + (cls ? " " + cls : "");
 }
 
+// Update the per-side name labels that sit between each player's
+// deck counter and deck pile. Visible to everyone on every client.
+// For spectators the labels switch meaning: bottom (self half) shows
+// the host (received via hello → oppName) and the top half shows the
+// player (received via peerHello → playerName).
+function refreshNameLabels() {
+  const selfEl = document.getElementById("selfNameLabel");
+  const oppEl = document.getElementById("oppNameLabel");
+  if (isSpectator) {
+    if (selfEl) selfEl.textContent = oppName || "";
+    if (oppEl) oppEl.textContent = playerName || "";
+  } else {
+    if (selfEl) selfEl.textContent = selfName || "";
+    if (oppEl) oppEl.textContent = oppName || "";
+  }
+}
+
+// Update the header tags showing the player's display name and the
+// current spectator count. Called whenever either value can change
+// (/name, hello received, spectator join/leave).
+function refreshHeaderTags() {
+  refreshNameLabels();
+  const playerTag = document.getElementById("playerTag");
+  if (playerTag) {
+    if (selfName) {
+      playerTag.textContent = selfName;
+      playerTag.hidden = false;
+    } else {
+      playerTag.hidden = true;
+      playerTag.textContent = "";
+    }
+  }
+  const spectatorTag = document.getElementById("spectatorTag");
+  if (spectatorTag) {
+    // Host: show the live count of spectator connections.
+    // Spectator: show that the lobby is in spectator mode (count
+    // isn't tracked client-side, so just an indicator).
+    if (isHost && spectatorConns.length > 0) {
+      const n = spectatorConns.length;
+      spectatorTag.textContent = `${n} spectator${n === 1 ? "" : "s"}`;
+      spectatorTag.hidden = false;
+    } else if (isSpectator) {
+      spectatorTag.textContent = "- Spectating";
+      spectatorTag.hidden = false;
+    } else {
+      spectatorTag.hidden = true;
+      spectatorTag.textContent = "";
+    }
+  }
+}
+
 function log(msg) {
   const el = document.getElementById("log");
   const e = document.createElement("div");
@@ -1525,8 +1666,17 @@ async function host() {
     }
   });
   peer.on("connection", (c) => {
-    conn = c;
-    wireConn();
+    // First joiner becomes the primary player; later joiners become
+    // spectators only when /spectators on has been set. Anyone else is
+    // bounced as soon as the channel opens.
+    if (!conn || !conn.open) {
+      conn = c;
+      wireConn();
+    } else if (spectatorsAllowed) {
+      wireSpectatorConn(c);
+    } else {
+      c.on("open", () => c.close());
+    }
   });
   peer.on("error", (e) => logPeerError(e));
 }
@@ -1601,18 +1751,62 @@ function wireConn() {
     // Tell the opp our accent so they render our card backs in our
     // color. Both sides fire this on open, so we exchange creds with
     // no order assumption.
-    conn.send({ type: "hello", palette: selfPaletteName });
+    conn.send({ type: "hello", palette: selfPaletteName, name: selfName });
     broadcastState();
   });
   conn.on("data", (data) => {
     if (!data) return;
-    if (data.type === "state") receiveOppState(data);
-    else if (data.type === "move") receiveOppMove(data);
+    if (data.type === "state") {
+      receiveOppState(data);
+      // Host: forward the player's state to spectators so they can
+      // render the top half of the board. Hands stay between the two
+      // players even if revealed — spectators never see card faces.
+      if (isHost) {
+        forwardToSpectators({ type: "peerState", ...data, hand: null });
+      }
+    } else if (data.type === "youAreSpectator") {
+      isSpectator = true;
+      applySpectatorMode();
+    } else if (data.type === "hostState") {
+      // Spectator-only: bottom half of the board (the host).
+      receiveSpectatorHostState(data);
+    } else if (data.type === "peerState") {
+      // Spectator-only: top half of the board (the other player).
+      receiveSpectatorPeerState(data);
+    } else if (data.type === "move") receiveOppMove(data);
     else if (data.type === "log") log("Opponent: " + data.message);
     else if (data.type === "ping") triggerPing(data.side, data.cardId);
-    else if (data.type === "chat")
-      receiveChatMessage(data.text, data.sender, data.variant);
-    else if (data.type === "winRecorded") receiveWinRecorded(data.wins);
+    else if (data.type === "dust") {
+      triggerDust(data.side, data.x, data.y, data.name, data.palette);
+      // Host: forward to spectators. The host's "opp" / "self" view
+      // matches the spectator's (host=self/bottom, player=opp/top),
+      // so we can pass the side straight through. Name + palette
+      // belong to the clicker — preserve them as-is.
+      if (isHost && spectatorConns.length) {
+        for (const sc of spectatorConns) {
+          if (sc && sc.open) {
+            sc.send({
+              type: "dust",
+              side: data.side,
+              x: data.x,
+              y: data.y,
+              name: data.name,
+              palette: data.palette,
+            });
+          }
+        }
+      }
+    } else if (data.type === "chat") {
+      receiveChatMessage(
+        data.text,
+        data.sender,
+        data.variant,
+        data.senderName,
+        data.senderPalette,
+      );
+      // Host fans player-originated chat out to spectators.
+      if (isHost) forwardToSpectators(data);
+    } else if (data.type === "winRecorded") receiveWinRecorded(data.wins);
     else if (data.type === "formatChange") receiveFormatChange(data.format);
     else if (data.type === "turnChange") receiveTurnChange(data.turn);
     else if (data.type === "newgame") {
@@ -1639,12 +1833,44 @@ function wireConn() {
     } else if (data.type === "hello") {
       if (data.palette && ACCENT_PALETTES[data.palette]) {
         oppPaletteName = data.palette;
+        // For spectators, the hello came from the host, who renders
+        // on the BOTTOM half — re-apply the self palette too so the
+        // host's color drives the bottom-half chrome.
+        if (isSpectator) applySelfPalette();
         applyOppPalette();
         // Re-render so opp's deck/discard/played card backs pick up
         // the new palette immediately.
         if (typeof renderOpp === "function") renderOpp();
         if (typeof drawOpp === "function") drawOpp();
+        if (typeof renderSelf === "function" && isSpectator) renderSelf();
       }
+      if (typeof data.name === "string") {
+        oppName = data.name.trim().slice(0, 24);
+        // Host forwards the player's name + palette to spectators as
+        // a peerHello so they can label the top half correctly.
+        if (isHost) {
+          forwardToSpectators({
+            type: "peerHello",
+            name: oppName,
+            palette: oppPaletteName,
+          });
+        }
+        refreshHeaderTags();
+      }
+    } else if (data.type === "peerHello") {
+      // Spectator-only: tells us the player (top-half) identity. We
+      // never want the spectator's own name/palette to leak into the
+      // visible halves — peerHello drives the top half exclusively.
+      if (typeof data.name === "string") {
+        playerName = data.name.trim().slice(0, 24);
+      }
+      if (data.palette && ACCENT_PALETTES[data.palette]) {
+        playerPaletteName = data.palette;
+        applyOppPalette();
+        if (typeof renderOpp === "function") renderOpp();
+        if (typeof drawOpp === "function") drawOpp();
+      }
+      refreshHeaderTags();
     }
   });
   conn.on("close", () => {
@@ -1656,6 +1882,79 @@ function wireConn() {
     clearTimeout(openTimeout);
     logPeerError(e);
   });
+}
+
+// Host-only: hook up a spectator's DataConnection. Spectators only
+// receive — they don't drive any game actions — so the data handler
+// just forwards their chat (read+write) and drops anything else on
+// the floor.
+function wireSpectatorConn(c) {
+  spectatorConns.push(c);
+  refreshHeaderTags();
+  c.on("open", () => {
+    log("Spectator joined");
+    refreshHeaderTags();
+    c.send({ type: "youAreSpectator" });
+    c.send({ type: "hello", palette: selfPaletteName, name: selfName });
+    // Seed the spectator with the player's identity (top half) too,
+    // if we've already received it via the player's hello.
+    if (oppName || oppPaletteName) {
+      c.send({ type: "peerHello", name: oppName, palette: oppPaletteName });
+    }
+    // Push the host's board (bottom half for them) and the cached
+    // player's board (top half) so the new spectator can render both
+    // halves immediately. Hands are stripped — spectators never see
+    // card faces from either player, even when revealed.
+    c.send(
+      Object.assign({ type: "hostState" }, buildStatePayload(), { hand: null }),
+    );
+    c.send({
+      type: "peerState",
+      deckCount: opp.deckCount,
+      handCount: opp.handCount,
+      hand: null,
+      discard: opp.discard,
+      set: opp.set,
+      play: opp.play,
+      counters: opp.counters,
+    });
+  });
+  c.on("data", (data) => {
+    if (!data) return;
+    if (data.type === "chat") {
+      // Spectator chat: render locally on host, forward to player and
+      // every other spectator.
+      receiveChatMessage(
+        data.text,
+        data.sender,
+        data.variant,
+        data.senderName,
+        data.senderPalette,
+      );
+      if (conn && conn.open) conn.send(data);
+      for (const sc of spectatorConns) {
+        if (sc !== c && sc.open) sc.send(data);
+      }
+    }
+  });
+  c.on("close", () => {
+    log("Spectator left");
+    spectatorConns = spectatorConns.filter((x) => x !== c);
+    refreshHeaderTags();
+  });
+  c.on("error", () => {
+    spectatorConns = spectatorConns.filter((x) => x !== c);
+    refreshHeaderTags();
+  });
+}
+
+// Forward a message from the primary player to every spectator. No-op
+// when called from a non-host or when there are no spectators.
+function forwardToSpectators(payload) {
+  if (!isHost) return;
+  for (const sc of spectatorConns) {
+    if (sc && sc.open) sc.send(payload);
+  }
 }
 
 // Receive a `state` message from the opponent and seed render positions so
@@ -1684,6 +1983,58 @@ function receiveOppState(data) {
   opp.counters = data.counters || { deck: 0 };
   renderOpp();
   ensureAnim();
+}
+
+// Spectator-only: the host's board lives at the BOTTOM of the
+// spectator's screen (their "self" half). The forwarded payload is
+// the host's broadcastState — same shape as `state`, just tagged
+// hostState so the host-side state path doesn't grab it.
+function receiveSpectatorHostState(data) {
+  if (!isSpectator) return;
+  spectatorSelfDeckCount = data.deckCount || 0;
+  spectatorSelfHandCount = data.handCount || 0;
+  // self.* fields still drive the renderer; we keep arrays empty so
+  // no card DOM is created, and inject the counts via the dedicated
+  // counter fields above.
+  self.deck = [];
+  self.hand = [];
+  self.discard = data.discard || [];
+  self.set = data.set || [];
+  self.play = data.play || [];
+  self.counters = data.counters || { deck: 0 };
+  renderSelf();
+}
+
+// Spectator-only: the player's board lives at the TOP (opp half).
+// We reuse the existing receiveOppState renderer since its DOM
+// targets and animation seeding are identical.
+function receiveSpectatorPeerState(data) {
+  if (!isSpectator) return;
+  receiveOppState(data);
+}
+
+// Joiner-only: flip the UI into spectator mode. Disables the End
+// Turn button and tags the body so CSS can hide the hand-row
+// chrome. Action handlers individually check `isSpectator` to short-
+// circuit.
+function applySpectatorMode() {
+  document.body.classList.add("spectator");
+  log("Joined as a spectator");
+  refreshHeaderTags();
+  const btn = document.getElementById("btnEndTurn");
+  if (btn) btn.disabled = true;
+  // Reset our self.* so we don't render cards from any auto-restored
+  // localStorage state — spectators have nothing of their own.
+  self.deck = [];
+  self.hand = [];
+  self.discard = [];
+  self.set = [];
+  self.play = [];
+  self.counters = { deck: 0 };
+  spectatorSelfDeckCount = 0;
+  spectatorSelfHandCount = 0;
+  renderSelf();
+  renderOpp();
 }
 
 // Apply a lightweight drag-move delta from the opponent. Only the moving
@@ -1715,6 +2066,11 @@ function receiveOppMove(data) {
 // and `triggerPing` call ensureAnim() to wake it.
 const PING_DURATION_MS = 700;
 let activePings = []; // [{ side: 'self'|'opp', cardId, startTime }]
+// Click-dust: small radial burst that appears at every left-click on
+// the play canvas. Shown to the local player and broadcast to the
+// peer + (for the host) any spectators so it's visible to everyone.
+const DUST_DURATION_MS = 550;
+let activeDust = []; // [{ side: 'self'|'opp', x, y (fractional), startTime, seed }]
 let animFrame = null;
 
 function ensureAnim() {
@@ -1745,14 +2101,15 @@ function tickAnim() {
       needsLerp = true;
     }
   }
-  // (2) Drop expired pings.
+  // (2) Drop expired pings + dust.
   const now = performance.now();
   activePings = activePings.filter((p) => now - p.startTime < PING_DURATION_MS);
-  const hasPings = activePings.length > 0;
-  // Redraw both canvases (ping drawing is part of drawBoard).
+  activeDust = activeDust.filter((d) => now - d.startTime < DUST_DURATION_MS);
+  const hasFx = activePings.length > 0 || activeDust.length > 0;
+  // Redraw both canvases (ping + dust drawing is part of drawBoard).
   drawSelf();
   drawOpp();
-  if (needsLerp || hasPings) animFrame = requestAnimationFrame(tickAnim);
+  if (needsLerp || hasFx) animFrame = requestAnimationFrame(tickAnim);
 }
 
 // Trigger a ping locally and (optionally) over the wire.
@@ -1766,6 +2123,90 @@ function broadcastPing(side, cardId) {
   // Flip the side when sending — what's "self" for me is the opp's "opp".
   const remoteSide = side === "self" ? "opp" : "self";
   conn.send({ type: "ping", side: remoteSide, cardId });
+}
+
+// Trigger a click-ripple locally + animate it. One entry per click,
+// drawn on the canvas the cursor was on. Coords are in that canvas's
+// internal space (already rotation-adjusted for opp), so the ripple
+// lands exactly at the click position on every viewer's screen.
+// `name` + `palette` belong to the clicker so the ripple uses their
+// accent colour and is labelled with their display name.
+function triggerDust(side, x, y, name, palette) {
+  activeDust.push({
+    side,
+    x,
+    y,
+    startTime: performance.now(),
+    name: name || "",
+    palette: palette || "",
+  });
+  ensureAnim();
+}
+
+// Send a click-ripple to the peer + (host only) every spectator with
+// the right perspective mapping. `localSide` is which canvas was
+// clicked on the sender's screen: "self" = the sender's own board,
+// "opp" = the canvas showing the other player's board. The peer
+// always sees the flipped side; spectators (which the host owns) see
+// the localSide as-is since host=self / player=opp from their POV.
+// The clicker's name + palette ride along so every viewer paints the
+// ripple in the clicker's colour and labels it with their name.
+function broadcastDust(localSide, x, y) {
+  const peerSide = localSide === "self" ? "opp" : "self";
+  const base = {
+    type: "dust",
+    x,
+    y,
+    name: selfName,
+    palette: selfPaletteName,
+  };
+  if (conn && conn.open) {
+    conn.send(Object.assign({}, base, { side: peerSide }));
+  }
+  if (isHost && spectatorConns.length) {
+    for (const sc of spectatorConns) {
+      if (sc && sc.open) {
+        sc.send(Object.assign({}, base, { side: localSide }));
+      }
+    }
+  }
+}
+
+// Small click-ripple — a single expanding ring (in the clicker's
+// accent colour) with the clicker's name labelled below. On the
+// rotated opp canvas the name is drawn with a local 180° rotation so
+// it reads right-side up on screen.
+function drawDust(ctx, cx, cy, elapsed, rgb, name, mirrored) {
+  const t = Math.min(elapsed / DUST_DURATION_MS, 1);
+  if (t >= 1) return;
+  const fade = 1 - t;
+  ctx.save();
+  ctx.strokeStyle = `rgba(${rgb}, ${fade * 0.85})`;
+  ctx.lineWidth = 1.6 * (1 - 0.5 * t);
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3 + t * 16, 0, Math.PI * 2);
+  ctx.stroke();
+  if (name) {
+    ctx.fillStyle = `rgba(${rgb}, ${fade})`;
+    ctx.font =
+      '600 11px ui-monospace, Menlo, Consolas, "Courier New", monospace';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    const offset = 24;
+    if (mirrored) {
+      // Canvas is CSS-rotated 180°; counter-rotate the label so it
+      // reads right-side up on screen, AND the visual "below the
+      // ring" direction flips relative to the canvas.
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.PI);
+      ctx.fillText(name, 0, offset);
+      ctx.restore();
+    } else {
+      ctx.fillText(name, cx, cy + offset);
+    }
+  }
+  ctx.restore();
 }
 
 function drawPing(ctx, cx, cy, elapsed) {
@@ -1828,7 +2269,49 @@ function broadcastStateThrottled() {
   }, 33);
 }
 
+// Face-down cards hide their rank/suit on the wire so the opponent /
+// spectators can't peek by inspecting the data. Counter and attached
+// cards (including their own redaction) still go through.
+function redactPlayCard(c) {
+  let out;
+  if (c.faceDown) {
+    out = {
+      id: c.id,
+      x: c.x,
+      y: c.y,
+      rot: c.rot || 0,
+      faceDown: true,
+      counter: c.counter,
+    };
+  } else {
+    out = c;
+  }
+  if (c.attached && c.attached.length > 0) {
+    out = Object.assign({}, out, { attached: c.attached.map(redactPlayCard) });
+  }
+  return out;
+}
+
+// Snapshot of OUR state, redacted for the wire. The same payload is
+// sent to the primary player AND each spectator — spectators just
+// receive it via a peerState forward instead of as a primary state.
+function buildStatePayload() {
+  return {
+    deckCount: self.deck.length,
+    handCount: self.hand.length,
+    // Hand is only sent when the player has chosen to reveal it.
+    // Spectators never see hand contents (handled at the receiver too).
+    hand: selfHandRevealed ? self.hand : null,
+    discard: self.discard,
+    set: self.set,
+    play: self.play.map(redactPlayCard),
+    counters: self.counters,
+  };
+}
+
 function broadcastState() {
+  // Spectators don't own a board, so they have nothing to share.
+  if (isSpectator) return;
   // Persist regardless of connection state — even offline edits should
   // survive a refresh so the player can reconnect with their board
   // intact.
@@ -1840,44 +2323,35 @@ function broadcastState() {
   makeSnapshot()
     .then((code) => console.log("[snapshot]", code))
     .catch(() => {});
-  if (!conn || !conn.open) return;
-  // Face-down cards hide their rank/suit on the wire so the opponent
-  // can't peek by inspecting the data. Counter and attached cards
-  // (including their own redaction) still go through.
-  const redactCard = (c) => {
-    let out;
-    if (c.faceDown) {
-      out = {
-        id: c.id,
-        x: c.x,
-        y: c.y,
-        rot: c.rot || 0,
-        faceDown: true,
-        counter: c.counter,
-      };
-    } else {
-      out = c;
+  const payload = buildStatePayload();
+  if (conn && conn.open) conn.send(Object.assign({ type: "state" }, payload));
+  // Host: also fan the same state out to spectators. Spectators don't
+  // run broadcastState themselves, so this is the only way they get
+  // updates to the host's half of the board. The hand is force-
+  // redacted for spectators so revealed-to-opp hands stay between
+  // the two players.
+  if (isHost && spectatorConns.length) {
+    const specPayload = Object.assign({ type: "hostState" }, payload, {
+      hand: null,
+    });
+    for (const sc of spectatorConns) {
+      if (sc && sc.open) sc.send(specPayload);
     }
-    if (c.attached && c.attached.length > 0) {
-      out = Object.assign({}, out, { attached: c.attached.map(redactCard) });
-    }
-    return out;
-  };
-  conn.send({
-    type: "state",
-    deckCount: self.deck.length,
-    handCount: self.hand.length,
-    // Hand is only sent when the player has chosen to reveal it.
-    hand: selfHandRevealed ? self.hand : null,
-    discard: self.discard,
-    set: self.set,
-    play: self.play.map(redactCard),
-    counters: self.counters,
-  });
+  }
 }
 
 function notifyOpp(msg) {
   if (conn && conn.open) conn.send({ type: "log", message: msg });
+}
+
+// Helper to fan a message out to all connected peers (primary player
+// plus every spectator). Used for chat so spectators can read messages
+// from both sides of the table.
+function sendToAllPeers(payload) {
+  if (conn && conn.open) conn.send(payload);
+  for (const sc of spectatorConns) {
+    if (sc && sc.open) sc.send(payload);
+  }
 }
 
 // ============================================================
@@ -2217,6 +2691,7 @@ function highlightDropZone(zoneEl) {
 // ---------- GHOST drag (DOM sources) ----------
 function attachGhostDrag(el, getSource) {
   el.addEventListener("pointerdown", (e) => {
+    if (isSpectator) return;
     if (e.button !== 0) return;
     if (e.target.closest("button, input, .ctx-menu")) return;
     const source = getSource();
@@ -2371,6 +2846,25 @@ selfCanvas.addEventListener("pointerdown", (e) => {
   const rect = selfCanvas.getBoundingClientRect();
   const px = e.clientX - rect.left;
   const py = e.clientY - rect.top;
+  // Spectators get the opp-canvas treatment on this half too: card
+  // → ping, empty space → no-op (no ripple — spectators are
+  // read-only). No drag / counter / context-menu paths run.
+  if (isSpectator) {
+    const card = hitTestPlay(px, py);
+    if (card) {
+      triggerPing("self", card.id);
+      broadcastPing("self", card.id);
+    }
+    return;
+  }
+  // Click-ripple at the cursor position — only on empty board space,
+  // not when clicking a card (deck/discard/sigil piles are DOM
+  // elements above the canvas so their clicks never reach here).
+  if (!hitTestPlay(px, py)) {
+    const { w, h } = boardSize(selfCanvas);
+    triggerDust("self", px / w, py / h, selfName, selfPaletteName);
+    broadcastDust("self", px / w, py / h);
+  }
   // Hold P + click → ping the card (visible to both players).
   if (pKeyDown) {
     const card = hitTestPlay(px, py);
@@ -2639,12 +3133,18 @@ selfCanvas.addEventListener("pointermove", (e) => {
   const py = e.clientY - rect.top;
   const card = hitTestPlay(px, py);
   const newId = card ? card.id : null;
-  // Default cursor; switch to "pointer" when over a counter button.
-  let cursor = card ? "grab" : "default";
-  if (cKeyDown && card) {
-    const rects = counterWidgetRects(card);
-    if (pointInRect(px, py, rects.inc) || pointInRect(px, py, rects.dec)) {
-      cursor = "pointer";
+  // Players get a "grab" cursor on cards (drag affordance) and a
+  // "pointer" cursor on counter +/- buttons while holding C.
+  // Spectators leave the cursor at default — the bottom half is
+  // read-only for them, same as the opp half.
+  let cursor = "default";
+  if (!isSpectator && card) {
+    cursor = "grab";
+    if (cKeyDown) {
+      const rects = counterWidgetRects(card);
+      if (pointInRect(px, py, rects.inc) || pointInRect(px, py, rects.dec)) {
+        cursor = "pointer";
+      }
     }
   }
   selfCanvas.style.cursor = cursor;
@@ -2738,6 +3238,8 @@ oppCanvas.addEventListener("pointerdown", (e) => {
   // The opp canvas is CSS-rotated 180°, so flip the cursor before hit-testing.
   const px = w - (e.clientX - rect.left);
   const py = h - (e.clientY - rect.top);
+  // First: did we click on an opp card? If yes, ping it and skip the
+  // click-ripple (ripples should only fire on empty board space).
   for (let i = opp.play.length - 1; i >= 0; i--) {
     const c = opp.play[i];
     const cx = c.x * w + CARD_W / 2;
@@ -2758,6 +3260,15 @@ oppCanvas.addEventListener("pointerdown", (e) => {
       return;
     }
   }
+  // Empty space → click-ripple, for players only. Spectators are
+  // read-only and don't emit ripples. xf/yf are in the opp canvas's
+  // internal coord space (already rotation-adjusted), so drawing
+  // there lands the ripple at the visual click position.
+  if (isSpectator) return;
+  const xf = px / w;
+  const yf = py / h;
+  triggerDust("opp", xf, yf, selfName, selfPaletteName);
+  broadcastDust("opp", xf, yf);
 });
 
 // Schedule a tooltip after the hover delay. `getAnchorRect` is called when
@@ -2852,6 +3363,7 @@ function playedCardScreenRect(canvas, card) {
 
 // Right-click on the canvas → hit-test and open the played-card menu.
 selfCanvas.addEventListener("contextmenu", (e) => {
+  if (isSpectator) return;
   const rect = selfCanvas.getBoundingClientRect();
   const card = hitTestPlay(e.clientX - rect.left, e.clientY - rect.top);
   e.preventDefault();
@@ -2931,17 +3443,26 @@ function untapFlippedCards() {
 // Render: DOM zones (deck, discard, hand) + canvases
 // ============================================================
 function renderSelf() {
-  document.getElementById("selfDeckCount").textContent = self.deck.length;
+  // Spectators: the "self" half shows the HOST's redacted board.
+  // Counts come from the forwarded payload (self.deck/hand stay empty
+  // so no card DOM gets created), and the deck pile renders as a
+  // single face-down back when non-zero.
+  const deckLen = isSpectator ? spectatorSelfDeckCount : self.deck.length;
+  document.getElementById("selfDeckCount").textContent = deckLen;
   document.getElementById("selfDeckCounter").textContent =
     self.counters.deck || 0;
   const deckHost = document.querySelector("#selfDeckPile .card-host");
   deckHost.innerHTML = "";
-  if (self.deck.length > 0) {
-    const fd = faceDownCardEl();
-    deckHost.appendChild(fd);
-    attachGhostDrag(fd, () =>
-      self.deck.length ? { type: "deckTop", cardId: self.deck[0].id } : null,
-    );
+  if (deckLen > 0) {
+    if (isSpectator) {
+      deckHost.appendChild(faceDownCardEl());
+    } else {
+      const fd = faceDownCardEl();
+      deckHost.appendChild(fd);
+      attachGhostDrag(fd, () =>
+        self.deck.length ? { type: "deckTop", cardId: self.deck[0].id } : null,
+      );
+    }
   }
 
   document.getElementById("selfDiscardCount").textContent = self.discard.length;
@@ -2976,19 +3497,32 @@ function renderSelf() {
   const hand = document.getElementById("selfHand");
   // Remove only card-wraps so the hand-pip (count badge) stays in place.
   hand.querySelectorAll(".card-wrap").forEach((el) => el.remove());
-  hand.classList.toggle("revealed", selfHandRevealed);
-  document.getElementById("selfHandCount").textContent = self.hand.length;
-  for (const c of self.hand) {
-    const wrap = document.createElement("div");
-    wrap.className = "card-wrap";
-    wrap.appendChild(cardEl(c));
-    attachGhostDrag(wrap, () => ({ type: "hand", cardId: c.id }));
-    wrap.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      openHandCardContext(e.clientX, e.clientY, c, wrap);
-    });
-    attachCardTooltip(wrap, c);
-    hand.appendChild(wrap);
+  hand.classList.toggle("revealed", !isSpectator && selfHandRevealed);
+  const handCount = isSpectator ? spectatorSelfHandCount : self.hand.length;
+  document.getElementById("selfHandCount").textContent = handCount;
+  if (isSpectator) {
+    // Render N face-down card backs (mirroring how the opp hand is
+    // shown) so a spectator can see how many cards the host is
+    // holding, without exposing the faces.
+    for (let i = 0; i < handCount; i++) {
+      const w = document.createElement("div");
+      w.className = "card-wrap";
+      w.appendChild(faceDownCardEl());
+      hand.appendChild(w);
+    }
+  } else {
+    for (const c of self.hand) {
+      const wrap = document.createElement("div");
+      wrap.className = "card-wrap";
+      wrap.appendChild(cardEl(c));
+      attachGhostDrag(wrap, () => ({ type: "hand", cardId: c.id }));
+      wrap.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        openHandCardContext(e.clientX, e.clientY, c, wrap);
+      });
+      attachCardTooltip(wrap, c);
+      hand.appendChild(wrap);
+    }
   }
 
   drawSelf();
@@ -3186,6 +3720,7 @@ function openHandCardContext(x, y, card, wrap) {
 // whether your hand is revealed to the opponent.
 const selfHandEl = document.getElementById("selfHand");
 selfHandEl.addEventListener("contextmenu", (e) => {
+  if (isSpectator) return;
   // Cards inside the hand have their own contextmenu handler that
   // preventDefaults; this path only fires when the click misses a card.
   e.preventDefault();
@@ -3323,6 +3858,7 @@ function openOppDiscardContext(x, y) {
 // ============================================================
 function pileClick(handler) {
   return function (e) {
+    if (isSpectator) return;
     if (suppressNextClick) {
       suppressNextClick = false;
       if (suppressNextClickTimer != null) {
@@ -3382,6 +3918,7 @@ document.getElementById("selfDeckPile").addEventListener(
   }),
 );
 document.getElementById("selfDeckPile").addEventListener("contextmenu", (e) => {
+  if (isSpectator) return;
   e.preventDefault();
   openDeckContext(e.clientX, e.clientY);
 });
@@ -3395,6 +3932,7 @@ document.getElementById("selfDiscardPile").addEventListener(
 document
   .getElementById("selfDiscardPile")
   .addEventListener("contextmenu", (e) => {
+    if (isSpectator) return;
     e.preventDefault();
     openDiscardContext(e.clientX, e.clientY);
   });
@@ -3758,14 +4296,17 @@ function rollD20() {
   log("Rolled d20: " + roll);
   notifyOpp("rolled a d20: " + roll);
   // Also surface in the chat as a system message, and broadcast a
-  // chat-formatted version to the opponent (they see "Opponent
-  // rolled a d20: N").
-  appendChatMessage("system", "You rolled a d20: " + roll, "roll-self");
+  // chat-formatted version so opp + spectators see who rolled.
+  const youText = (selfName || "You") + " rolled a d20: " + roll;
+  appendChatMessage("system", youText, "roll-self");
   if (conn && conn.open) {
+    const wireText = (selfName || "Opponent") + " rolled a d20: " + roll;
     conn.send({
       type: "chat",
       sender: "system",
-      text: "Opponent rolled a d20: " + roll,
+      text: wireText,
+      senderName: selfName,
+      senderPalette: selfPaletteName,
       // Receiver tags the row with this variant so it picks up the
       // opp's accent (we sent it, so from their side it's the opp).
       variant: "roll-opp",
@@ -3781,6 +4322,7 @@ function rollD20() {
 // spacebar shortcut can share one path. Bails when it's not your turn
 // — you can only end your OWN turn, never grab the opp's.
 function endTurn() {
+  if (isSpectator) return;
   if (currentTurn !== "self") return;
   currentTurn = "opp";
   applyTurnVisual();
@@ -3814,6 +4356,10 @@ function receiveTurnChange(turn) {
 // Initial paint — the saved state may have started us on opp's turn,
 // and the .half elements exist before this point in script load.
 applyTurnVisual();
+refreshHeaderTags();
+// First-boot path: if we synthesized a "Player NN" name (no saved
+// value), persist it now so the number stays stable across refreshes.
+if (!_savedName) saveLocalState();
 
 document.getElementById("modalClose").onclick = closeModal;
 document.getElementById("modal").addEventListener("click", (e) => {
@@ -4129,7 +4675,7 @@ const chatMessagesEl = document.getElementById("chatMessages");
 const chatInput = document.getElementById("chatInput");
 let chatUnread = 0;
 
-function appendChatMessage(side, text, variant) {
+function appendChatMessage(side, text, variant, senderName, senderPalette) {
   const row = document.createElement("div");
   row.className = "chat-message " + side;
   if (variant) row.classList.add(variant);
@@ -4148,7 +4694,27 @@ function appendChatMessage(side, text, variant) {
   } else {
     const sender = document.createElement("span");
     sender.className = "chat-sender";
-    sender.textContent = side === "self" ? "You" : "Opponent";
+    // Prefer the per-message senderName when present (covers chat
+    // forwarded through the host, where the recipient might not
+    // otherwise know the original speaker's name). Fall back to the
+    // long-lived oppName, then to a generic label. Spectators get a
+    // "(spectator)" suffix on their own bubble so it's clear they
+    // aren't a player.
+    const selfLabel = selfName
+      ? isSpectator
+        ? `${selfName} (spectator)`
+        : selfName
+      : "You";
+    sender.textContent =
+      side === "self" ? selfLabel : senderName || oppName || "Opponent";
+    // If the wire payload carried the sender's palette name, paint
+    // the label in that colour directly — this lets a spectator's
+    // chat show in THEIR own selected colour to every viewer, even
+    // though the half-mapped --opp-accent would otherwise drive opp
+    // bubbles.
+    if (side === "opp" && senderPalette && ACCENT_PALETTES[senderPalette]) {
+      sender.style.color = ACCENT_PALETTES[senderPalette].accent;
+    }
     const t = document.createElement("span");
     t.className = "chat-text";
     t.textContent = text;
@@ -4191,15 +4757,27 @@ function sendChatMessage(text) {
   if (!text) return;
   appendChatMessage("self", text);
   if (conn && conn.open) {
-    conn.send({ type: "chat", text });
+    // Embed our display name with each message so the receiver (and
+    // any spectator the host forwards it on to) can label the bubble
+    // with the right name. Spectators tag their wire name with a
+    // "(spectator)" suffix so the other clients see them as such.
+    const wireName = isSpectator
+      ? `${selfName || "spectator"} (spectator)`
+      : selfName;
+    conn.send({
+      type: "chat",
+      text,
+      senderName: wireName,
+      senderPalette: selfPaletteName,
+    });
   }
 }
 
-function receiveChatMessage(text, sender, variant) {
+function receiveChatMessage(text, sender, variant, senderName, senderPalette) {
   text = String(text || "").slice(0, 1000);
   if (!text) return;
   const side = sender === "system" ? "system" : "opp";
-  appendChatMessage(side, text, variant);
+  appendChatMessage(side, text, variant, senderName, senderPalette);
   if (chatEl.classList.contains("collapsed")) {
     setChatUnread(chatUnread + 1);
     playBoop();
@@ -4248,6 +4826,32 @@ function handleChatCommand(line) {
   const parts = line.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
   const arg = parts.slice(1).join(" ").trim();
+  // Spectators are read-only — block anything that would mutate the
+  // game state or pretend they're a player.
+  const spectatorBlocked = new Set([
+    "/roll",
+    "/win",
+    "/stats",
+    "/reset",
+    "/newgame",
+    "/myturn",
+    "/snapshot",
+    "/restore",
+    "/format",
+    "/spectators",
+  ]);
+  if (cmd === "/name") {
+    cmdName(arg);
+    return;
+  }
+  if (isSpectator && spectatorBlocked.has(cmd)) {
+    appendChatMessage("system", "Spectators can't run that command");
+    return;
+  }
+  if (cmd === "/spectators" && !isHost) {
+    appendChatMessage("system", "Only the host can toggle spectators");
+    return;
+  }
   switch (cmd) {
     case "/help":
       cmdHelp();
@@ -4279,6 +4883,9 @@ function handleChatCommand(line) {
     case "/format":
       cmdFormat(arg);
       break;
+    case "/spectators":
+      cmdSpectators(arg);
+      break;
     case "/clear":
       cmdClear();
       break;
@@ -4293,6 +4900,7 @@ function handleChatCommand(line) {
 function cmdHelp() {
   const lines = [
     "-- Basic commands --",
+    "/name <name> - set your display name (shown to other players)",
     "/roll - rolls a d20",
     "/myturn - makes it your turn (useful for going first)",
     "/win - records a win for this lobby",
@@ -4305,6 +4913,7 @@ function cmdHelp() {
     "/reset - resets the lobby (including stats)",
     "/snapshot - saves your board state to your clipboard",
     "/restore - restores your board from your clipboard (run /snapshot first)",
+    "/spectators on|off - host: let extra peers join as read-only spectators",
 
     "-- Other commands --",
     "/help - show this message",
@@ -4329,13 +4938,15 @@ function statsLine() {
   // W–L per side. Your losses are the opp's wins (they won → you
   // lost); their losses are your wins. Both peers display the same
   // numbers in the same slots.
-  return `You: ${selfWins}–${oppWins} · Opponent: ${oppWins}–${selfWins}`;
+  const you = selfName || "You";
+  const them = oppName || "Opponent";
+  return `${you}: ${selfWins}–${oppWins} · ${them}: ${oppWins}–${selfWins}`;
 }
 
 function cmdWin() {
   selfWins++;
   saveLocalState();
-  appendChatMessage("system", `You won. ${statsLine()}`);
+  appendChatMessage("system", `${selfName || "You"} won. ${statsLine()}`);
   if (conn && conn.open) {
     conn.send({ type: "winRecorded", wins: selfWins });
   }
@@ -4382,6 +4993,59 @@ function cmdMyTurn() {
   if (conn && conn.open) {
     conn.send({ type: "turnChange", turn: "opp" });
   }
+}
+
+// Set the local display name. Persisted, and broadcast to the peer
+// (and any spectators the host fans it out to) via a hello message
+// so future chat lines + commands show the new name.
+function cmdName(arg) {
+  const next = (arg || "").trim().slice(0, 24);
+  if (!next) {
+    appendChatMessage(
+      "system",
+      selfName
+        ? `Your name is "${selfName}". Usage: /name <new name>`
+        : "Usage: /name <name>",
+    );
+    return;
+  }
+  selfName = next;
+  saveLocalState();
+  refreshHeaderTags();
+  appendChatMessage("system", `Name set to "${selfName}"`);
+  // Tell the peer (and via the host, any spectators).
+  if (conn && conn.open) {
+    conn.send({ type: "hello", palette: selfPaletteName, name: selfName });
+  }
+  if (isHost) {
+    for (const sc of spectatorConns) {
+      if (sc && sc.open) {
+        sc.send({ type: "hello", palette: selfPaletteName, name: selfName });
+      }
+    }
+  }
+}
+
+// Host-only: toggle whether extra peers can join as spectators after
+// the primary player is connected. Persisted via saveLocalState so it
+// sticks across refreshes within the same lobby.
+function cmdSpectators(arg) {
+  const v = (arg || "").trim().toLowerCase();
+  if (v !== "on" && v !== "off") {
+    appendChatMessage(
+      "system",
+      `Spectators are ${spectatorsAllowed ? "on" : "off"}. Usage: /spectators on|off`,
+    );
+    return;
+  }
+  spectatorsAllowed = v === "on";
+  saveLocalState();
+  appendChatMessage(
+    "system",
+    spectatorsAllowed
+      ? "Spectators allowed — share your lobby link with viewers"
+      : "Spectators blocked",
+  );
 }
 
 const SNAPSHOT_VERSION = 1;
@@ -4655,7 +5319,7 @@ function cmdFormat(arg) {
 function receiveWinRecorded(wins) {
   if (typeof wins !== "number") return;
   oppWins = wins;
-  appendChatMessage("system", `Opponent won. ${statsLine()}`);
+  appendChatMessage("system", `${oppName || "Opponent"} won. ${statsLine()}`);
   if (chatEl.classList.contains("collapsed")) {
     setChatUnread(chatUnread + 1);
   }

@@ -99,11 +99,28 @@
                     type="button"
                     title="Open changelog"
                 >
-                    0.2
+                    0.2b
                 </button>
                 <div class="changelog-panel">
                     <section class="changelog-section">
-                        <h3>2025/05/26</h3>
+                        <h3>b - 2025/05/29</h3>
+                        <ul>
+                            <li>
+                                Player names. Can be set with:
+                                <code>/name &lt;name&gt;</code>.
+                            </li>
+                            <li>
+                                Spectator mode (disabled by default). The host
+                                runs <code>/specators on</code> to enable
+                                spectator joins after the lobby is full.
+                                <br />
+                                Can be disabled with
+                                <code>/specators off</code>.
+                            </li>
+                        </ul>
+                    </section>
+                    <section class="changelog-section">
+                        <h3>a - 2025/05/26</h3>
                         <ul>
                             <li>
                                 Swapped card rotation key from <kbd>T</kbd> to
@@ -153,6 +170,12 @@
                 placeholder="Enter lobby code to join…"
             />
             <button id="btnJoin">Join Game</button>
+            <span class="header-tag player-tag" id="playerTag" hidden></span>
+            <span
+                class="header-tag spectator-tag"
+                id="spectatorTag"
+                hidden
+            ></span>
             <span class="status" id="status">Not connected</span>
         </header>
 
@@ -170,6 +193,7 @@
                 <div class="zones-side">
                     <div class="side-label">Opponent</div>
                     <div class="zone">
+                        <div class="counter-name" id="oppNameLabel"></div>
                         <div class="pile" id="oppSetPile">
                             <div class="stacked"></div>
                             <div class="card-host"></div>
@@ -213,6 +237,7 @@
                 <div class="zones-side">
                     <div class="side-label you">You</div>
                     <div class="zone">
+                        <div class="counter-name" id="selfNameLabel"></div>
                         <div class="pile" id="selfSetPile">
                             <div class="stacked"></div>
                             <div class="card-host"></div>
