@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ail playground</title>
+<style>
+/* ============================================================================
+   FMOS — Field Manual of Style. Reusable kit: tokens + every named part.
+   ========================================================================== */
+:root{
+  --ink:#16130d; --ink-2:#26221a; --muted:#8a8272;
+  --paper:#e8e3d4; --surface:#ddd7c6;
+  --accent:#1f74b8; --accent-2:#16537f; --on-accent:#f4efe4;
+  --rule:rgba(22,19,13,.26); --rule-2:rgba(22,19,13,.13);
+  --mono:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,"Liberation Mono","Courier New",monospace;
+  --serif:Georgia,"Times New Roman",Times,serif;
+  --display:"Helvetica Neue",Arial,sans-serif;
+  --gothic:"UnifrakturMaguntia","Old English Text MT","Cloister Black","Trattatello","Luminari",serif;
+  --gutter:clamp(20px,6vw,56px); --sp-section:34px; --sp-block:20px; --sp-tight:10px;
+}
+*{ box-sizing:border-box; }
+body{ margin:0; background:var(--paper); color:var(--ink); font-family:var(--serif); font-size:18px; line-height:1.6; }
+.wrap{ max-width:1060px; margin:0 auto; padding:0 var(--gutter); }
+::selection{ background:var(--accent); color:var(--on-accent); }
+
+/* Grain */
+.grain::before{ content:""; position:fixed; inset:0; z-index:80; pointer-events:none; opacity:.05; mix-blend-mode:multiply;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+/* Type roles */
+.Prose  { font-family:var(--serif); }
+.Marquee{ font-family:var(--display); font-weight:800; text-transform:uppercase; letter-spacing:-.01em; line-height:.98; }
+.Readout{ font-family:var(--mono); font-weight:700; }
+.Micro  { font-family:var(--mono); font-weight:700; font-size:11px; letter-spacing:.15em; text-transform:uppercase; }
+.Gothic { font-family:var(--gothic); }
+
+mark.Marker{ background:color-mix(in srgb,var(--accent) 40%,transparent); color:inherit;
+  padding:.14em .34em; margin:0 -.16em; -webkit-box-decoration-break:clone; box-decoration-break:clone; }
+.Kilter{ display:inline-block; transform:rotate(-1.8deg); } .Kilter.pos{ transform:rotate(1.9deg); }
+
+/* Fills */
+.Dither   { background-color:var(--paper); background-image:radial-gradient(var(--ink) 1.2px,transparent 1.6px); background-size:6px 6px; }
+.Grid     { background-color:var(--paper); background-image:linear-gradient(var(--rule) 1px,transparent 1px),linear-gradient(90deg,var(--rule) 1px,transparent 1px); background-size:13px 13px; }
+.HazardFill{background-image:repeating-linear-gradient(-45deg,var(--accent) 0 13px,var(--ink) 13px 26px); }
+
+/* Structure */
+.SectionBar{ border-top:2px solid var(--ink); border-bottom:2px solid var(--ink); height:56px; display:flex; align-items:center; }
+.Placard{ background:var(--ink); color:var(--paper); border:2px solid var(--ink); margin-left:var(--gutter); padding:9px 18px;
+  font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:.18em; text-transform:uppercase; }
+.Placard .n{ color:var(--accent); margin-right:10px; }
+.Rubric{ display:flex; align-items:center; gap:12px; margin:22px 0 10px; font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:.16em; text-transform:uppercase; }
+.Rubric .n{ color:var(--accent); } .Rubric .ln{ flex:1; border-top:2px solid var(--ink); }
+.Rubric small{ font-size:10px; letter-spacing:.08em; opacity:.55; text-transform:none; }
+
+/* Content parts */
+.Panel{ border:2px solid var(--ink); background:var(--paper); padding:12px 14px; }
+.Note{ border:2px solid var(--ink); background:var(--surface); padding:14px 16px; font-family:var(--serif); font-size:16.5px; }
+.Note b{ font-family:var(--mono); font-weight:700; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); }
+.Hairline{ border:0; border-top:1px solid var(--rule); }
+.Bezel{ border:2px solid var(--ink); background:var(--paper); }
+.Bezel .bar{ display:flex; gap:12px; align-items:center; background:var(--ink); color:var(--paper); font-family:var(--mono); font-weight:700; font-size:11px; padding:4px 9px; }
+.Bezel .bar .dot{ width:9px; height:9px; border:1.5px solid var(--paper); border-radius:50%; }
+.Bezel .bar .fn{ margin-left:auto; opacity:.6; }
+
+/* Marks */
+.Tag{ display:inline-block; font-family:var(--mono); font-weight:700; font-size:11px; letter-spacing:.07em; text-transform:uppercase; border:1.5px solid var(--ink); padding:2px 8px; }
+.Tag.hot{ background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+.Bind{ color:var(--accent); }
+.Stamp{ font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:.06em; } .Stamp b{ color:var(--accent); }
+
+/* ============================================================================
+   PLAYGROUND — app chrome built from the kit. Full-viewport, two-workbench.
+   ========================================================================== */
+html,body{ height:100%; }
+body{ display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+
+/* header band — placard, a one-line note, and the version stamp */
+.SectionBar{ flex:none; justify-content:space-between; gap:18px; }
+.SectionBar .Tag{ margin-left:var(--gutter); font-size:12px; letter-spacing:.1em; padding:4px 11px; }
+.SectionBar .hd-note{ font-family:var(--serif); font-size:15px; color:var(--ink-2);
+  flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.SectionBar .hd-note code{ font-family:var(--mono); font-weight:700; font-size:.86em; color:var(--accent-2); }
+.SectionBar .Stamp{ margin-right:var(--gutter); color:var(--muted); white-space:nowrap; }
+.SectionBar .Stamp b{ color:var(--accent-2); }
+
+/* control deck — buttons + target select, in a dark instrument strip */
+.controls{ flex:none; background:var(--ink); border-bottom:2px solid var(--ink); }
+.controls .wrap{ display:flex; align-items:center; gap:10px; padding-top:6px; padding-bottom:6px; flex-wrap:wrap; }
+.ctl-label{ font-family:var(--mono); font-weight:700; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--muted); margin-left:4px; }
+
+button, select{ font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--paper); background:transparent; border:2px solid var(--paper); padding:6px 13px; cursor:pointer; line-height:1; }
+button:hover, select:hover{ background:var(--paper); color:var(--ink); }
+button.primary{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+button.primary:hover{ background:var(--accent-2); border-color:var(--accent-2); color:var(--on-accent); }
+select{ padding:6px 8px; }
+select option{ background:var(--paper); color:var(--ink); }
+.spacer{ flex:1; }
+/* Reference button lives in the light header — ink on paper */
+#doc-open{ color:var(--ink); border-color:var(--ink); background:transparent; }
+#doc-open:hover{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+/* example picker lives in the light Source header — ink on paper */
+#example{ color:var(--ink); border-color:var(--ink); background:transparent; padding:4px 8px;
+  font-size:11px; letter-spacing:.04em; }
+#example:hover{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.hd label.f{ cursor:default; }
+
+/* workspace — two plain panels (no window chrome), filling the rest of the screen */
+main{ flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr;
+  border-top:2px solid var(--ink); }
+.pane{ display:flex; flex-direction:column; min-height:0; min-width:0; }
+.pane:first-child{ border-right:2px solid var(--ink); }
+
+/* a plain labelled rule that opens a pane / a section within a pane;
+   fixed height so headers align whether they hold text or a control (select) */
+.hd{ flex:none; display:flex; align-items:center; gap:12px; height:44px; padding:0 var(--gutter);
+  border-bottom:2px solid var(--ink); font-family:var(--mono); font-weight:700; font-size:11px;
+  letter-spacing:.16em; text-transform:uppercase; background:var(--paper); }
+.hd .n{ color:var(--accent); }
+.hd .ln{ flex:1; border-top:1px solid var(--rule); }
+.hd .f{ color:var(--muted); letter-spacing:.06em; text-transform:none; font-size:11px; }
+
+/* editor — a line-number gutter beside the textarea, metrics kept identical */
+.editor{ flex:1; min-height:0; display:flex; overflow:hidden; background:var(--surface); }
+.gutter{ flex:none; overflow:hidden; text-align:right; white-space:pre; user-select:none;
+  padding:16px 10px 16px 16px; border-right:1px solid var(--rule); color:var(--muted);
+  background:var(--surface); font-family:var(--mono); font-weight:600; font-size:13.5px; line-height:1.6; }
+#code{ flex:1; resize:none; border:0; outline:0; padding:16px 16px 16px 12px; min-height:0;
+  background:var(--surface); color:var(--ink); overflow:auto;
+  font-family:var(--mono); font-weight:600; font-size:13.5px; line-height:1.6; tab-size:3; }
+
+/* output pane — program output on top, diagnostics below, both plain */
+.out{ flex:1; display:flex; flex-direction:column; min-height:0; }
+.out pre{ margin:0; padding:14px var(--gutter); overflow:auto; white-space:pre-wrap; word-break:break-word;
+  font-family:var(--mono); font-weight:600; font-size:13px; line-height:1.55; }
+#stdout{ flex:1; min-height:0; color:var(--ink); }
+/* status folded into the PROGRAM OUTPUT rule, in the undertone */
+#status{ font-family:var(--mono); font-weight:700; font-size:11px; letter-spacing:.04em;
+  text-transform:none; color:var(--accent-2); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; max-width:44ch; }
+#status.ok{ color:var(--accent-2); }
+#status.err{ color:#a8341c; }
+.diag-bar{ border-top:2px solid var(--ink); }
+#diag{ flex:0 1 auto; max-height:40%; min-height:0; color:var(--accent-2); background:var(--surface); }
+#diag:empty{ display:none; }
+
+@media (max-width:820px){
+  body{ height:auto; overflow:auto; }
+  main{ grid-template-columns:1fr; }
+  .pane:first-child{ border-right:0; border-bottom:2px solid var(--ink); }
+  #code{ min-height:44vh; }
+  .out{ min-height:36vh; }
+}
+
+/* ---- REFERENCE OVERLAY (plain bordered card, no window chrome) ---------- */
+.ref{ position:fixed; inset:0; z-index:90; display:flex;
+  padding:clamp(14px,4vw,48px); background:rgba(22,19,13,.42); }
+.ref[hidden]{ display:none; }
+.ref-card{ margin:auto; width:min(1000px,100%); height:min(88vh,900px);
+  display:flex; flex-direction:column; border:2px solid var(--ink); background:var(--paper);
+  box-shadow:10px 10px 0 rgba(22,19,13,.28); }
+.ref-head{ display:flex; align-items:center; gap:10px; padding:11px 14px;
+  background:var(--ink); border-bottom:2px solid var(--ink); flex-wrap:wrap; }
+.ref-head .rt{ font-family:var(--mono); font-weight:700; font-size:12px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--paper); margin-right:2px; }
+.ref-head .rt b{ color:var(--accent); }
+.ref-tabs{ display:flex; border:2px solid var(--paper); }
+.ref-tabs button{ color:var(--paper); border:0; border-right:2px solid var(--paper);
+  background:transparent; padding:5px 13px; }
+.ref-tabs button:last-child{ border-right:0; }
+.ref-tabs button:hover{ background:var(--paper); color:var(--ink); }
+.ref-tabs button.on{ background:var(--accent); color:var(--on-accent); }
+#ref-q{ flex:1; min-width:160px; font-family:var(--mono); font-weight:600; font-size:13px;
+  color:var(--ink); background:var(--paper); border:2px solid var(--paper); padding:6px 11px; outline:0; }
+#ref-q:focus{ border-color:var(--accent); }
+#ref-count{ color:var(--muted); white-space:nowrap; }
+#ref-close{ color:var(--paper); border-color:var(--paper); }
+#ref-close:hover{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+.ref-body{ flex:1; min-height:0; display:grid; grid-template-columns:220px 1fr; }
+#ref-index{ overflow:auto; border-right:2px solid var(--ink); background:var(--paper);
+  padding:8px 0; }
+#ref-index a{ display:block; padding:3px 12px; text-decoration:none; color:var(--ink);
+  font-family:var(--mono); font-weight:700; font-size:11px; letter-spacing:.02em; line-height:1.4;
+  border-left:3px solid transparent; cursor:pointer; }
+#ref-index a.sub{ padding-left:24px; font-weight:600; color:var(--ink-2); font-size:10.5px; }
+#ref-index a:hover{ background:var(--surface); border-left-color:var(--accent); }
+#ref-index a.hit{ border-left-color:var(--accent); }
+#ref-index a[hidden]{ display:none; }
+#ref-content{ overflow:auto; padding:6px 20px 28px; background:var(--paper); }
+#ref-content .sec{ padding-top:16px; }
+#ref-content .sec[hidden]{ display:none; }
+#ref-content h3{ margin:14px 0 6px; font-family:var(--display); font-weight:800;
+  font-size:18px; letter-spacing:-.01em; }
+#ref-content h4{ margin:12px 0 4px; font-family:var(--mono); font-weight:700; font-size:12px;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--accent-2); }
+#ref-content pre{ margin:0; font-family:var(--mono); font-weight:600; font-size:12.5px;
+  line-height:1.55; color:var(--ink); white-space:pre-wrap; word-break:break-word; }
+#ref-content mark{ background:color-mix(in srgb,var(--accent) 42%,transparent); color:inherit; padding:0 1px; }
+#ref-content .none{ font-family:var(--mono); font-weight:700; color:var(--muted); padding:24px 4px; }
+@media (max-width:640px){ .ref-body{ grid-template-columns:1fr; } #ref-index{ display:none; } }
+</style>
+</head>
+<body class="grain">
+
+<header class="SectionBar">
+  <span class="Tag hot">ail &middot; playground</span>
+  <span class="hd-note"><code>aic</code>, the self-hosted ail compiler as <mark class="Marker">WebAssembly in your browser</mark> &mdash; no server.</span>
+  <button id="doc-open">Reference</button>
+  <span class="Stamp">VER <b>0.1</b> &middot; WASM32</span>
+</header>
+
+<div class="controls">
+  <div class="wrap">
+    <button id="run" class="primary">Run via Wasm &#9654;</button>
+    <button id="check">Check</button>
+    <span class="ctl-label">Target</span>
+    <select id="target" title="cross-compilation target">
+      <option value="2">macos-arm64</option>
+      <option value="3">macos-amd64</option>
+      <option value="4">linux-arm64</option>
+      <option value="5">linux-amd64</option>
+      <option value="6">windows-arm64</option>
+      <option value="7">windows-amd64</option>
+      <option value="8">wasm32-wasi</option>
+      <option value="1">wasm32-freestanding</option>
+      <option value="9">wasm64-wasi</option>
+      <option value="10">wasm64-freestanding</option>
+    </select>
+    <button id="download">Compile &amp; Download</button>
+  </div>
+</div>
+
+<main>
+  <section class="pane">
+    <div class="hd"><span class="n">&#9656;</span>Source<span class="ln"></span>
+      <label class="f" for="example">example</label>
+      <select id="example" title="load an example program"></select>
+    </div>
+    <div class="editor">
+      <div id="gutter" class="gutter" aria-hidden="true">1</div>
+      <textarea id="code" spellcheck="false" wrap="off"></textarea>
+    </div>
+  </section>
+
+  <section class="pane">
+    <div class="out">
+      <div class="hd"><span class="n">&#9656;</span>Program output<span class="ln"></span><span id="status">loading&hellip;</span></div>
+      <pre id="stdout"></pre>
+      <div class="hd diag-bar"><span class="n">&#9656;</span>Diagnostics<span class="ln"></span><span class="f">compiler, fd&nbsp;2</span></div>
+      <pre id="diag"></pre>
+    </div>
+  </section>
+</main>
+
+<div id="ref" class="ref" hidden>
+  <div class="ref-card">
+    <div class="ref-head">
+      <span class="rt">Ref<b>&middot;</b></span>
+      <div class="ref-tabs">
+        <button id="ref-tab-cheat" class="on">Cheatsheet</button>
+        <button id="ref-tab-spec">Language Spec</button>
+      </div>
+      <input id="ref-q" type="search" spellcheck="false" autocomplete="off" placeholder="search the reference&hellip;">
+      <span id="ref-count" class="Micro"></span>
+      <button id="ref-close">Close &#10005;</button>
+    </div>
+    <div class="ref-body">
+      <nav id="ref-index"></nav>
+      <div id="ref-content"></div>
+    </div>
+  </div>
+</div>
+<script src="playground.js"></script>
+</body>
+</html>
