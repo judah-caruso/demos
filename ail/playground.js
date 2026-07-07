@@ -42,7 +42,7 @@ async function loadCompiler() {
 }
 
 // Run the embedded compiler over `source`. Returns { rc, diag, moduleBytes }.
-function compileSource(source, mode) {
+function compileSource(source, mode, flags = 0) {
    let mem;
    const fdout = ['', '', ''];        // captured stdout/stderr by fd index
    const inst = new WebAssembly.Instance(compilerModule, envImports((fd, ptr, len) => {
@@ -56,7 +56,7 @@ function compileSource(source, mode) {
    new Uint8Array(mem.buffer).set(src, Number(p));      // fresh view: aic_alloc may have grown memory
 
    let rc;
-   try { rc = Number(aic_compile(p, BigInt(src.length), BigInt(mode))); }
+   try { rc = Number(aic_compile(p, BigInt(src.length), BigInt(mode), BigInt(flags))); }
    catch (e) { return { rc: -1, diag: fdout[2] + '\n[compiler trapped] ' + e.message }; }
 
    let outBytes = null;
@@ -106,8 +106,12 @@ function onDownload() {
    const sel = el('target');
    const code = Number(sel.value);
    const tname = sel.options[sel.selectedIndex].textContent;
-   setStatus('compiling for ' + tname + '…');
-   const { rc, diag, outBytes } = compileSource(el('code').value, code);
+   // debug checked -> flags = debug(1) | bundle(2): the pdb/source travel inside the
+   // one downloaded file, so every target stays a single download.
+   const dbg = el('debug') && el('debug').checked;
+   const flags = dbg ? 3 : 0;
+   setStatus('compiling for ' + tname + (dbg ? ' (debug)' : '') + '…');
+   const { rc, diag, outBytes } = compileSource(el('code').value, code, flags);
    if (rc !== 0) { el('diag').textContent = diag || '(compile failed, rc=' + rc + ')'; setStatus('compile error', 'err'); return; }
    const ext = tname.startsWith('windows') ? '.exe' : tname.startsWith('wasm') ? '.wasm' : '';
    const name = 'program-' + tname + ext;
